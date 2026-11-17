@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>paper-fetch settings</title>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="page">
+    <header class="page-head">
+      <img src="icons/icon.svg" width="32" height="32" alt="">
+      <div class="page-title">
+        <h1>paper-fetch</h1>
+        <p>Settings</p>
+      </div>
+      <span id="saved" class="saved-note" role="status" aria-live="polite"></span>
+    </header>
+
+    <section class="card">
+      <h2>Library access</h2>
+      <p class="lede">
+        paper-fetch downloads with the access this browser already has. On campus or on
+        your university VPN it needs no setup. For off-campus use, add your library's
+        proxy below. It never sees or stores your password.
+      </p>
+
+      <div class="setting">
+        <label for="proxy">Library proxy link</label>
+        <div class="control">
+          <input id="proxy" class="input" spellcheck="false" placeholder="https://login.ezproxy.youruni.edu/login?url=">
+          <button id="openProxy" class="btn" type="button">Sign in</button>
+        </div>
+        <p class="hint">
+          Your library's EZproxy sign-in link, the one that ends in <code>url=</code>. It
+          usually looks like <code>login.ezproxy.youruni.edu/login?url=</code> or
+          <code>youruni.idm.oclc.org/login?url=</code>. You can paste any link from your
+          library's site that goes through the proxy and it is trimmed for you. Leave blank
+          if you have none.
+        </p>
+      </div>
+
+      <div class="setting">
+        <label for="customer">EBSCO customer code</label>
+        <div class="control">
+          <input id="customer" class="input" spellcheck="false" placeholder="Found automatically on first use">
+          <button id="detect" class="btn" type="button">Detect</button>
+          <button id="openEbsco" class="btn" type="button">Open EBSCO</button>
+        </div>
+        <p id="ebscoNote" class="hint">
+          Only if your library subscribes to EBSCO. It is the part after <code>/c/</code> in
+          <code>research.ebsco.com/c/…/</code> once you are signed in; leave it blank and it
+          is looked up the first time EBSCO is needed.
+        </p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Saving</h2>
+      <div class="setting">
+        <label for="subfolder">Folder inside Downloads</label>
+        <input id="subfolder" class="input" spellcheck="false" placeholder="None: save straight into Downloads">
+        <p class="hint">A paper is saved as <code id="preview"></code></p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Auto-download</h2>
+      <label class="switch setting-switch">
+        <span class="switch-text">Download right after a search when the top match is clear</span>
+        <input id="autoDefault" type="checkbox">
+        <span class="track"></span>
+      </label>
+      <div class="pair">
+        <div class="setting">
+          <label for="threshold">Top match is at least</label>
+          <div class="unit">
+            <input id="threshold" class="input" type="number" min="50" max="100" step="1">
+            <span>%</span>
+          </div>
+        </div>
+        <div class="setting">
+          <label for="margin">And leads the next one by</label>
+          <div class="unit">
+            <input id="margin" class="input" type="number" min="0" max="50" step="1">
+            <span>points</span>
+          </div>
+        </div>
+      </div>
+      <p class="hint">Otherwise the matches are listed and you choose.</p>
+    </section>
+  </main>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

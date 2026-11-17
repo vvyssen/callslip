@@ -1,0 +1,281 @@
+/* Tokens and the controls shared by the popup and the settings page. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #faf8f4;
+  --surface: #ffffff;
+  --inset: #f2efe9;
+  --text: #1e1c19;
+  --muted: #6a655c;
+  --faint: #8a8479;
+  --line: #e8e4db;
+  --line-strong: #d5cfc3;
+  --accent: #1f5c4a;
+  --accent-hover: #17483a;
+  --accent-ink: #1f5c4a; /* the accent when it is text or an icon */
+  --accent-soft: #e4efe9;
+  --on-accent: #ffffff;
+  --ok: #1f6a4b;
+  --ok-soft: #e4f1ea;
+  --warn: #8a5a12;
+  --warn-soft: #f8efdc;
+  --err: #a23a3a;
+  --err-soft: #f9e9e7;
+  --ring: rgba(31, 92, 74, 0.28);
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
+  --serif: "Iowan Old Style", Charter, "Palatino Linotype", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181715;
+    --surface: #201f1c;
+    --inset: #2a2824;
+    --text: #ece8df;
+    --muted: #a8a297;
+    --faint: #7f796e;
+    --line: #34312b;
+    --line-strong: #4a463e;
+    --accent: #2f705a;
+    --accent-hover: #3a8169;
+    --accent-ink: #86d3b3;
+    --accent-soft: #1c2c25;
+    --ok: #86d3b3;
+    --ok-soft: #1c2c25;
+    --warn: #e6bc74;
+    --warn-soft: #2e2715;
+    --err: #f0a5a0;
+    --err-soft: #331f1e;
+    --ring: rgba(134, 211, 179, 0.35);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font: 13px/1.45 var(--sans);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+/* ---- buttons ---- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: none;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.btn:hover {
+  border-color: var(--accent-ink);
+  color: var(--accent-ink);
+}
+
+.btn.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.btn.primary:hover {
+  background: var(--accent-hover);
+  color: var(--on-accent);
+}
+
+.btn:disabled {
+  border-color: transparent;
+  background: var(--inset);
+  color: var(--faint);
+  cursor: default;
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: var(--inset);
+  color: var(--text);
+}
+
+.icon-btn svg,
+.btn svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+/* ---- text inputs ---- */
+
+.input {
+  height: 30px;
+  min-width: 0;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.input::placeholder,
+textarea::placeholder {
+  color: var(--faint);
+}
+
+.input:focus {
+  border-color: var(--accent-ink);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* ---- switch: <label class="switch"><input type="checkbox"><span class="track"></span>Label</label> ---- */
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch .track {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background-color 140ms ease;
+}
+
+.switch .track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 140ms ease;
+}
+
+.switch input:checked + .track {
+  background: var(--accent);
+}
+
+.switch input:checked + .track::after {
+  transform: translateX(12px);
+}
+
+.switch input:checked ~ .switch-text {
+  color: var(--text);
+}
+
+.switch input:focus-visible + .track {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+/* ---- small parts ---- */
+
+.spinner {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent-ink);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+.btn.primary .spinner {
+  border-color: rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+}
+
+.btn:disabled .spinner {
+  border-color: var(--line-strong);
+  border-top-color: var(--muted);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface);
+  font: 10.5px/14px var(--sans);
+  color: var(--muted);
+  text-align: center;
+}
+
+code {
+  font: 0.92em var(--mono);
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--inset);
+}

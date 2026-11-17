@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>paper-fetch</title>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app">
+    <header class="bar">
+      <img class="logo" src="icons/icon.svg" width="22" height="22" alt="">
+      <h1>paper-fetch</h1>
+      <button id="settings" class="icon-btn" type="button" aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+          <path d="M2 4.5h5.5M12.5 4.5H14M2 11.5h1.5M8.5 11.5H14"/>
+          <circle cx="10" cy="4.5" r="2"/>
+          <circle cx="6" cy="11.5" r="2"/>
+        </svg>
+      </button>
+    </header>
+
+    <form id="form" class="search" autocomplete="off">
+      <div class="field">
+        <svg class="field-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.5"/>
+          <path d="M10.5 10.5 14 14"/>
+        </svg>
+        <textarea id="title" rows="1" placeholder="Paste a paper title or DOI" aria-label="Paper title or DOI" spellcheck="false"></textarea>
+        <button id="clear" class="field-clear" type="button" aria-label="Clear" title="Clear" hidden>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>
+          </svg>
+        </button>
+      </div>
+      <div class="row">
+        <input id="author" class="input" placeholder="Author" aria-label="Author, optional">
+        <input id="year" class="input" placeholder="Year" aria-label="Year, optional" inputmode="numeric" maxlength="4">
+        <label class="switch" title="Download right away when the top match is clearly the paper you asked for">
+          <input id="auto" type="checkbox">
+          <span class="track"></span>
+          <span class="switch-text">Auto-download</span>
+        </label>
+        <button id="search" class="btn primary" type="submit">Search</button>
+      </div>
+    </form>
+
+    <p id="notice" class="notice" role="status"></p>
+
+    <section id="matches" class="matches" hidden>
+      <h2 id="count" class="matches-head"></h2>
+      <ul id="results" class="results" role="listbox" aria-labelledby="count" tabindex="-1"></ul>
+    </section>
+
+    <section id="job" class="job" aria-live="polite" hidden></section>
+
+    <footer id="foot" class="foot" hidden>
+      <span id="hint" class="hint"></span>
+      <button id="download" class="btn primary" type="button">Download PDF</button>
+    </footer>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
