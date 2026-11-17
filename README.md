@@ -2,13 +2,24 @@
 
 [中文说明](README.zh-CN.md)
 
-One click to save a paper from an INFORMS journal (*Management Science*, *Operations Research*, *M&SOM* and the rest) as a properly named PDF. For papers elsewhere, it goes through the access you already have: the publisher's site, your library's proxy, EBSCO, or an open-access copy.
+A Chrome extension that saves a paper as a properly named PDF in one click, through your own university library. It was built for INFORMS journals (*Management Science*, *Operations Research*, *M&SOM* and the rest) and works for other papers too.
 
 <p>
   <img src="docs/screenshots/popup-on-page.png" width="270" alt="Opened on an INFORMS article: the paper is recognised">
   <img src="docs/screenshots/popup-page-list.png" width="270" alt="Opened on an issue page: its papers are listed">
   <img src="docs/screenshots/popup-results.png" width="270" alt="Matches for a pasted title">
 </p>
+
+## Why this exists
+
+On the INFORMS site, signing in through my university no longer leads to a download. To get a paper I had to leave the article, go to the library's databases, search for the same paper again, and download it there. Paper Fetch makes that trip for you:
+
+- **One click from the article.** Open it on an INFORMS article or issue page and the paper is recognised from the page.
+- **It finds your library's proxy.** Type your university's name once and its proxy link is filled in.
+- **It downloads from EBSCO directly.** Once you are signed in to your library's EBSCO, the paper is searched for and downloaded there, in the background.
+- **A title is enough.** When a title is all you have, it is looked up on Crossref and you pick the match.
+
+It only ever uses your own university sign-in. See the [disclaimer](#disclaimer).
 
 ## What it does
 
@@ -79,9 +90,12 @@ Paper Fetch has no server and no analytics. The title or DOI you search goes to 
 
 Permissions it asks for: **activeTab** (read the page you click the button on), **downloads** (save the PDF), **storage** (settings), and **scripting on ebsco.com** (run the search on the EBSCO page).
 
-## Use it within your library's terms
+## Disclaimer
 
-Paper Fetch does not get around paywalls. It only reaches what your own subscriptions or open access already give you. Publisher licences forbid systematic bulk downloading, and libraries can lose access over it, so this downloads one paper at a time, on your request.
+- **Your own access only.** Paper Fetch downloads through the university sign-in you complete yourself, in your own browser. It has no account or access of its own and never sees your password.
+- **Not a download service.** It does not supply papers, share anyone's access, or download on anyone's behalf. What your library does not give you, Paper Fetch cannot get, apart from a legally open-access copy.
+- **Do not bulk download.** Publisher licences forbid systematic downloading, and a library can have its access suspended over it. Paper Fetch saves one paper at a time, when you ask. Do not script it or use it to harvest issues or journals.
+- You are responsible for following your library's and the publishers' terms of use. Paper Fetch is an independent project, not affiliated with INFORMS, EBSCO, Crossref, OpenAlex, or any publisher or library.
 
 ## Development
 

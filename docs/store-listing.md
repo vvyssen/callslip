@@ -28,7 +28,9 @@ Files are named by first author, year and first title word, for example tukamuha
 
 When no route works, the popup says what each one ran into and gives you a link to open the article through your library.
 
-Paper Fetch does not get around paywalls. It only reaches what your own library subscriptions or open access already give you. It has no server and no analytics, and it never sees your password.
+Why it exists: on the INFORMS site, signing in through the author's university no longer leads to a download, so every paper meant a detour through the library's databases. Paper Fetch makes that detour for you.
+
+Disclaimer: Paper Fetch works only through the university sign-in you complete yourself. It is not a download service: it does not supply papers, share access, or download on anyone's behalf. Do not use it for bulk downloading; publisher licences forbid it. It has no server and no analytics, and it never sees your password. Not affiliated with INFORMS, EBSCO, Crossref or OpenAlex.
 
 Setup: on campus it needs none. Off campus, type your university's name in settings and pick it from the list of about 1,500 libraries.
 
