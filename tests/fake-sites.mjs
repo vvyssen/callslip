@@ -6,6 +6,7 @@
 //   www.tandfonline.com             another publisher that answers with a paywall page
 //   login.ezproxy.test-uni.edu      an EZproxy sign-in host
 //   <site>.ezproxy.test-uni.edu     the publishers above, read through that proxy
+//   login.ezproxy.other-uni.edu     a second proxy that never shows a menu page
 //   journal.example-press.org       a publisher we have no address pattern for
 //   research.ebsco.com              the EBSCO search app
 //   libproxy-db.org                 the public directory of library proxies
@@ -19,13 +20,20 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const PROXY_LINK = "https://login.ezproxy.test-uni.edu/login?url=";
+export const OTHER_PROXY_LINK = "https://login.ezproxy.other-uni.edu/login?url=";
 const PROXY = "ezproxy.test-uni.edu";
+// Sends a signed-in visitor of /login to /menu, as EZproxy does by default.
+// The other one keeps them on /login, so only being handed on to a proxied
+// site shows there is a session.
+const PROXIES = { [PROXY]: { menu: true }, "ezproxy.other-uni.edu": { menu: false } };
 const HOSTS = [
   "pubsonline.informs.org",
   "www.tandfonline.com",
   `login.${PROXY}`,
   `pubsonline-informs-org.${PROXY}`,
   `www-tandfonline-com.${PROXY}`,
+  "login.ezproxy.other-uni.edu",
+  "pubsonline-informs-org.ezproxy.other-uni.edu",
   "journal.example-press.org",
   "research.ebsco.com",
   "libproxy-db.org",
@@ -36,6 +44,7 @@ const HOSTS = [
 export const PAGE_PERMISSIONS = [
   "https://pubsonline.informs.org/*",
   `https://*.${PROXY}/*`,
+  "https://*.ezproxy.other-uni.edu/*",
   "https://journal.example-press.org/*",
 ];
 
@@ -96,6 +105,7 @@ export async function startFakeSites({ dir, port, ebscoTitle }) {
       const host = req.headers.host;
       const url = new URL(req.url, `https://${host}`);
       const path = decodeURIComponent(url.pathname);
+      const proxy = Object.keys(PROXIES).find((name) => host.endsWith(`.${name}`));
       const signedIn = /(^|;\s*)ezproxy=1/.test(req.headers.cookie || "");
       hits.push(`${host}${url.pathname}${url.search}`);
       const send = (body, type = "text/html; charset=utf-8", extra = {}) => {
@@ -122,23 +132,32 @@ export async function startFakeSites({ dir, port, ebscoTitle }) {
       if (host === "pubsonline.informs.org") return informs(false);
       if (host === "www.tandfonline.com") return paywall();
 
-      if (host === `login.${PROXY}`) {
+      if (proxy && host === `login.${proxy}`) {
+        // What a library with single sign-on answers a signed-out visitor: no
+        // password box, just a form that posts itself to the university.
+        const signInPage = () => send(page("Library sign-in",
+          `<form method="post" action="https://sso.${proxy.split(".").slice(1).join(".")}/idp"><input type="hidden" name="SAMLRequest" value="x"></form>`));
         if (url.searchParams.has("signin")) {
           // No SameSite attribute, like a default EZproxy session cookie.
           return send(page("Signed in", "ok"), "text/html", {
-            "Set-Cookie": `ezproxy=1; Path=/; Domain=${PROXY}; Secure`,
+            "Set-Cookie": `ezproxy=1; Path=/; Domain=${proxy}; Secure`,
           });
         }
-        const target = url.search.startsWith("?url=") ? url.search.slice(5) : "";
-        if (!signedIn || !target) {
-          return send(page("Library sign-in", "<form><input name='user'><input name='pass' type='password'></form>"));
+        if (path === "/logout") {
+          return send(page("Signed out", "You have signed out."), "text/html", {
+            "Set-Cookie": `ezproxy=; Path=/; Domain=${proxy}; Secure; Max-Age=0`,
+          });
         }
+        if (!signedIn) return signInPage();
+        if (path === "/menu") return send(page("Library databases", '<a href="/logout">Logout</a>'));
+        const target = url.search.startsWith("?url=") ? url.search.slice(5) : "";
+        if (!target) return PROXIES[proxy].menu ? redirect("/menu") : send(page("Library", "Welcome back."));
         const wanted = new URL(target);
-        return redirect(`https://${wanted.hostname.replaceAll(".", "-")}.${PROXY}${wanted.pathname}${wanted.search}`);
+        return redirect(`https://${wanted.hostname.replaceAll(".", "-")}.${proxy}${wanted.pathname}${wanted.search}`);
       }
 
-      if (host.endsWith(`.${PROXY}`)) {
-        if (!signedIn) return redirect(`https://login.${PROXY}/login`);
+      if (proxy) {
+        if (!signedIn) return redirect(`https://login.${proxy}/login`);
         if (host.startsWith("pubsonline-informs-org.")) return informs(true);
         return path.startsWith("/doi/pdf/") ? pdf("proxied.pdf") : paywall();
       }

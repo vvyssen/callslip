@@ -49,6 +49,7 @@ Download the PDF of a scholarly paper, recognised from the page the user is on o
 - storage: keeps the user's settings (library proxy link, EBSCO customer code, download folder, auto-download preferences) and the last search.
 - scripting: runs the search and presses the download button on the EBSCO page in a background tab, on the user's request.
 - Host permission `https://*.ebsco.com/*`: the scripting above is limited to EBSCO's site.
+- Optional host permissions (`https://*/*`, `http://*/*`): never requested as a whole. When the user presses Sign in in settings, the extension asks for the one site of their own library's proxy, to read its sign-in page and show whether they are signed in. Libraries differ per user, so the site cannot be listed in advance.
 
 ## Data usage
 

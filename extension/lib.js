@@ -314,6 +314,74 @@ export function proxied(proxy, target) {
   return proxy + (encoded ? encodeURIComponent(target) : target);
 }
 
+// The proxy's own name: its sign-in host without the "login." in front. The
+// sites it proxies appear as <site>.<this name>.
+function proxyName(proxy) {
+  try {
+    const url = new URL(proxy.replace("{url}", ""));
+    if (!/^https?:$/.test(url.protocol) || url.hostname === "go.openathens.net") return null;
+    return { url, name: url.hostname.replace(/^login\./, "") };
+  } catch {
+    return null;
+  }
+}
+
+// Host patterns covering the proxy's sign-in page and the sites behind it;
+// what the extension must be allowed to read to tell whether you are signed
+// in. Null for links this cannot be worked out for.
+export function proxyScope(proxy) {
+  const found = proxyName(proxy);
+  if (!found) return null;
+  const patterns = [`https://*.${found.name}/*`];
+  if (found.url.protocol === "http:") patterns.push(`http://*.${found.name}/*`);
+  return patterns;
+}
+
+// Sites most libraries proxy, used only to see whether a session exists.
+const SESSION_PROBES = [
+  "https://onlinelibrary.wiley.com/",
+  "https://pubsonline.informs.org/",
+  "https://www.jstor.org/",
+];
+
+// Whether the browser holds a live session with the library proxy: "in" or
+// "out". Needs the permission from proxyScope().
+//
+// Only things a session alone produces count as "in". The absence of a
+// password box does not: libraries with single sign-on answer a signed-out
+// visitor with a bare page that forwards to the university's sign-in.
+export async function proxySession(proxy) {
+  const found = proxyName(proxy);
+  if (!found) return "out";
+  const { url: login, name } = found;
+  const land = async (address) => {
+    try {
+      const response = await fetch(address, {
+        credentials: "include",
+        cache: "no-store",
+        signal: AbortSignal.timeout(8000),
+      });
+      response.body?.cancel();
+      return new URL(response.url);
+    } catch {
+      return null; // forwarded to a site we may not read (the university's sign-in), or too slow
+    }
+  };
+  const inside = (host) => host === name || host.endsWith(`.${name}`);
+
+  // 1. EZproxy sends someone who is already signed in from /login to /menu.
+  const menu = await land(`${login.origin}/login`);
+  if (menu && inside(menu.hostname) && /^\/menu\b/.test(menu.pathname)) return "in";
+
+  // 2. Asked for a site it proxies, it hands a signed-in visitor on to the
+  //    proxied copy (<site>.<name>); anyone else stays at the sign-in.
+  const landings = await Promise.all(SESSION_PROBES.map((target) => land(proxied(proxy, target))));
+  const handedOn = landings.some(
+    (at) => at && inside(at.hostname) && at.hostname !== name && !at.hostname.startsWith("login."),
+  );
+  return handedOn ? "in" : "out";
+}
+
 export function citeKey(candidate) {
   const family = lastName((candidate.authors || [])[0] || "anon") || "anon";
   const year = String(candidate.year || "nd");

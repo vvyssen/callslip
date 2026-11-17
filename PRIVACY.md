@@ -9,6 +9,7 @@ Paper Fetch has no server of its own, no account, no analytics and no advertisin
 | You search | The title, author and year you typed, or the DOI | Crossref (`api.crossref.org`) |
 | You download | The DOI of the paper | OpenAlex (`api.openalex.org`), to look for an open-access copy |
 | You download | An ordinary download request for the PDF | The publisher, your library's proxy, or EBSCO |
+| The settings page is open, and you allowed it | Requests to your library proxy's own sign-in address, to see whether you are signed in. Nothing about you is added to them. | Your library's proxy |
 | You search for your university in settings | A request for the public list of library proxies. What you type is matched in your browser and is not sent. | libproxy-db.org |
 
 The download requests are the same ones your browser would make if you clicked the link yourself, and they carry the sessions you are already signed in to. Paper Fetch does not read, copy or store your cookies or passwords.
@@ -26,6 +27,7 @@ Nothing else is stored. Removing the extension removes all of it.
 
 ## Permissions
 
+- Your library proxy's site (optional, asked for the first time you press Sign in in settings): read the proxy's sign-in page, so the settings page can show whether you are signed in and sign you out. If you decline, downloads work the same; only that indicator is missing.
 - `activeTab`: read the page you click the button on, as described above. It gives no access to your other tabs or your browsing history.
 - `downloads`: save the PDF and check that what arrived is a PDF.
 - `storage`: keep the settings above.

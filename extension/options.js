@@ -1,4 +1,4 @@
-import { downloadPath, normalizeProxy } from "./lib.js";
+import { downloadPath, normalizeProxy, proxyScope, proxySession } from "./lib.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -209,6 +209,7 @@ async function pickSchool(school) {
     await save("proxy");
     $("proxyNote").textContent = `Proxy link set for ${school.name}. Press Sign in to check it opens your library's sign-in page.`;
     $("proxyNote").className = "hint ok";
+    checkSession();
   } catch (error) {
     flash(`Not saved: ${error.message}`, true);
   }
@@ -246,7 +247,9 @@ $("school").addEventListener("keydown", (event) => {
 
 for (const id of Object.keys(CONTROLS)) {
   $(id).addEventListener("change", () => {
-    save(id).catch((error) => flash(`Not saved: ${error.message}`, true));
+    save(id)
+      .then(() => id === "proxy" && checkSession())
+      .catch((error) => flash(`Not saved: ${error.message}`, true));
   });
 }
 $("subfolder").addEventListener("input", showPreview);
@@ -255,26 +258,113 @@ $("detect").addEventListener("click", detect);
 $("openEbsco").addEventListener("click", () => {
   chrome.tabs.create({ url: "https://research.ebsco.com/" });
 });
+// ---- signed in to the library, or not ----
+//
+// The button next to the proxy link is "Sign in" until a session with the
+// library proxy exists, then a red "Sign out". Seeing that needs permission to
+// read the proxy's pages, which is asked for on the first Sign in.
+
+let session = "unknown"; // "in" | "out" | "unknown" (not allowed to look, or no proxy)
+let signInTab = null;
+let looking = null;
+const PROXY_HINT = $("proxyNote").innerHTML;
+
+function showSession(state) {
+  session = state;
+  const signedIn = state === "in";
+  const button = $("openProxy");
+  button.textContent = signedIn ? "Sign out" : "Sign in";
+  button.classList.toggle("danger", signedIn);
+  const note = $("proxyState");
+  note.hidden = state === "unknown";
+  note.textContent = signedIn ? "Signed in to your library" : "Not signed in";
+  note.className = `state ${state}`;
+  if (signedIn) {
+    // "Press Sign in to check…" has been answered.
+    $("proxyNote").innerHTML = PROXY_HINT;
+    $("proxyNote").className = "hint";
+  }
+}
+
+async function checkSession() {
+  const proxy = $("proxy").value.trim();
+  const scope = proxy ? proxyScope(proxy) : null;
+  if (!scope || !(await chrome.permissions.contains({ origins: scope }))) {
+    showSession("unknown");
+    return;
+  }
+  if (!looking) {
+    // The button keeps its last state while this runs; only the line under it changes.
+    $("proxyState").hidden = false;
+    $("proxyState").textContent = "Checking your library sign-in…";
+    $("proxyState").className = "state";
+    looking = proxySession(proxy).finally(() => {
+      looking = null;
+    });
+  }
+  const state = await looking;
+  if ($("proxy").value.trim() === proxy) showSession(state);
+}
+
+async function signOut(origin) {
+  const button = $("openProxy");
+  button.disabled = true;
+  try {
+    await fetch(`${origin}/logout`, { credentials: "include", cache: "no-store" });
+  } catch {
+    // Reaching /logout is what ends the session, even if its page cannot be read.
+  }
+  button.disabled = false;
+  await checkSession();
+}
+
 $("openProxy").addEventListener("click", () => {
   // "<proxy>/login?url=" without a target is the proxy's own sign-in page.
+  const proxy = normalizeProxy($("proxy").value);
   let url;
   try {
-    url = new URL(normalizeProxy($("proxy").value).replace("{url}", ""));
+    url = new URL(proxy.replace("{url}", ""));
   } catch {
     flash("Enter your library's proxy link first", true);
     return;
   }
+  if (session === "in") {
+    signOut(url.origin);
+    return;
+  }
   if (url.hostname === "go.openathens.net") url = new URL("https://my.openathens.net/");
   else url.search = "";
-  chrome.tabs.create({ url: url.href });
+  // Asked here because Chrome only allows it straight from a click. Declining
+  // changes nothing except that this page cannot show the signed-in state.
+  const scope = proxyScope(proxy);
+  const asked = scope ? chrome.permissions.request({ origins: scope }).catch(() => false) : Promise.resolve(false);
+  asked.then(async () => {
+    const tab = await chrome.tabs.create({ url: url.href });
+    signInTab = tab.id;
+  });
+});
+
+// Look again whenever the answer may have changed: the sign-in tab was closed,
+// or this page came back into view.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId !== signInTab) return;
+  signInTab = null;
+  checkSession();
+});
+window.addEventListener("focus", checkSession);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) checkSession();
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.settings?.newValue) {
-    send({ type: "settings:get" }).then((response) => show(response.settings));
+    send({ type: "settings:get" })
+      .then((response) => show(response.settings))
+      .then(checkSession);
   }
 });
 
 send({ type: "settings:get" })
   .then((response) => show(response?.settings || {}))
+  .then(checkSession)
   .catch((error) => flash(error.message, true));

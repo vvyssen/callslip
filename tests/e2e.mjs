@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launch, sleep } from "./cdp.mjs";
-import { startFakeSites, PROXY_LINK, PAGE_PERMISSIONS, INFORMS, NO_PATTERN } from "./fake-sites.mjs";
+import { startFakeSites, PROXY_LINK, OTHER_PROXY_LINK, PAGE_PERMISSIONS, INFORMS, NO_PATTERN } from "./fake-sites.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const shotsAt = process.argv.indexOf("--shots");
@@ -205,6 +205,10 @@ try {
   })()`);
   settings = (await message(options, { type: "settings:get" })).settings;
   check("a pasted proxied link is trimmed to the sign-in link", settings.proxy === PROXY_LINK, settings.proxy);
+  const proxyButton = () => evaluate(options, "document.getElementById('openProxy').textContent + (document.getElementById('openProxy').classList.contains('danger') ? ' (red)' : '')");
+  const waitButton = (label) => waitFor(options, `document.getElementById('openProxy').textContent === '${label}'`, 15000).then(() => true, () => false);
+  await waitFor(options, "!document.getElementById('proxyState').hidden", 10000).catch(() => {});
+  check("signed out: the button says Sign in, though the sign-in page has no password box", (await proxyButton()) === "Sign in" && (await text(options, "proxyState")) === "Not signed in", `${await proxyButton()} / ${await text(options, "proxyState")}`);
 
   // signed out of the proxy
   result = await download(popup, () => click(popup, "download"));
@@ -226,6 +230,42 @@ try {
   check("downloads through the library proxy once signed in", result.status === "done" && result.provider === "Library proxy", `${result.status} ${result.provider || ""}`);
   check("file is named by cite key and is a PDF", result.filename === PAYWALLED.file && saved().includes(PAYWALLED.file) && isPdf(PAYWALLED.file), result.filename);
   await snap(popup, "popup-saved.png");
+
+  // ------------------------------------------------ signed-in state in settings
+  // Signed out for a moment, to go through the button: it opens the library's sign-in tab.
+  await evaluate(options, "fetch('https://login.ezproxy.test-uni.edu/logout', { credentials: 'include' }).then(() => true)");
+  await evaluate(options, "(window.dispatchEvent(new Event('focus')), true)");
+  await waitButton("Sign in");
+  await click(options, "openProxy");
+  await sleep(1200);
+  const signInTab = (await browser.targets()).find((target) => target.type === "page" && target.url === "https://login.ezproxy.test-uni.edu/login");
+  check("Sign in opens the library's sign-in page", Boolean(signInTab));
+  // The person signs in there and closes the tab; nothing is clicked in settings.
+  const signInPage = await browser.attach(signInTab.targetId);
+  await evaluate(signInPage, "fetch('/login?signin=1', { credentials: 'include' }).then(() => true)");
+  await browser.send("Target.closeTarget", { targetId: signInTab.targetId });
+  check("after signing in, the button turns into a red Sign out by itself", (await waitButton("Sign out")) && (await proxyButton()) === "Sign out (red)" && (await text(options, "proxyState")) === "Signed in to your library", `${await proxyButton()} / ${await text(options, "proxyState")}`);
+  await snap(options, "settings-signed-in.png", { width: 720, maxHeight: 1000, full: true });
+  await snap(options, "reset.png", { width: 720, maxHeight: 1000 });
+  fake.hits.length = 0;
+  await click(options, "openProxy");
+  check("Sign out ends the session and the button goes back to Sign in", (await waitButton("Sign in")) && fake.hits.includes("login.ezproxy.test-uni.edu/logout"), await proxyButton());
+
+  // A proxy that shows no menu page: being handed on to a proxied site is the evidence.
+  await message(options, { type: "settings:set", settings: { proxy: OTHER_PROXY_LINK } });
+  await waitFor(options, `document.getElementById('proxy').value === '${OTHER_PROXY_LINK}' && !document.getElementById('proxyState').hidden`, 10000);
+  check("another library, signed out", (await proxyButton()) === "Sign in");
+  const otherSignIn = await browser.open("https://login.ezproxy.other-uni.edu/login?signin=1");
+  await waitFor(otherSignIn, "document.title === 'Signed in'", 10000);
+  await evaluate(options, "(window.dispatchEvent(new Event('focus')), true)");
+  check("signed in there is recognised without a menu page", await waitButton("Sign out"), await proxyButton());
+
+  // Back to the first library, signed in, for the rest of the run.
+  await message(options, { type: "settings:set", settings: { proxy: PROXY_LINK } });
+  const again = await browser.open("https://login.ezproxy.test-uni.edu/login?signin=1");
+  await waitFor(again, "document.title === 'Signed in'", 10000);
+  await evaluate(options, "(window.dispatchEvent(new Event('focus')), true)");
+  check("switching libraries follows the saved link", await waitButton("Sign out"), await proxyButton());
 
   // ------------------------------------------------ opened on an article page
   // INFORMS, off campus: the paper is recognised, the publisher refuses, the proxy delivers.

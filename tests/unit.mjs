@@ -62,6 +62,13 @@ eq("proxy from page: qurl form", lib.proxyFromUrl("https://e.edu/login?qurl=http
 eq("proxy from page: an ordinary login page is not one", lib.proxyFromUrl("https://example.com/login?url=/dashboard"), null);
 eq("proxy from page: an article page is not one", lib.proxyFromUrl("https://pubsonline.informs.org/doi/10.1287/x"), null);
 
+// which pages the sign-in check has to be allowed to read
+eq("scope: login host and its sibling sites", lib.proxyScope("https://login.ezproxy.uni.edu/login?url="), ["https://*.ezproxy.uni.edu/*"]);
+eq("scope: proxy named without login.", lib.proxyScope("https://uni.idm.oclc.org/login?url="), ["https://*.uni.idm.oclc.org/*"]);
+eq("scope: an http link may be upgraded by the server", lib.proxyScope("http://libproxy.uni.edu/login?url="), ["https://*.libproxy.uni.edu/*", "http://*.libproxy.uni.edu/*"]);
+eq("scope: OpenAthens has no such check", lib.proxyScope("https://go.openathens.net/redirector/uni.edu?url="), null);
+eq("scope: not a link", lib.proxyScope("nonsense"), null);
+
 // matching
 eq("similarity: identical after normalising", lib.titleSimilarity("Supply-Chain Resilience: A Review", "supply chain resilience – a review"), 1);
 near("similarity: one-word title inside a long query stays low", lib.titleSimilarity("Supply chain resilience under disruption risk and uncertainty", "Resilience"), 0, 0.5);

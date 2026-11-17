@@ -63,6 +63,8 @@ The settings page opens on first install.
 | Off campus | In settings, type your university's name, pick it, and press **Sign in**. |
 | Your library has EBSCO | Sign in to EBSCO once in this browser. The rest is found automatically. |
 
+Once you have signed in, the **Sign in** button in settings turns into a red **Sign out**, so you can see whether your library session is live and end it when you are done. The first time you press Sign in, Chrome asks whether Paper Fetch may read your library proxy's pages; that is only used for this check, and declining leaves everything else working.
+
 The university search covers about 1,500 libraries that use EZproxy, from the public list at [libproxy-db.org](https://libproxy-db.org/). If yours is not there, either paste any link from your library's website that goes through its proxy (it is trimmed to the part that matters), or open the popup while you are on your library's sign-in page and choose **Use it for downloads**.
 
 ## About EBSCO
@@ -88,7 +90,7 @@ EBSCO is not a subject database. It hosts many databases that libraries subscrib
 
 Paper Fetch has no server and no analytics. The title or DOI you search goes to Crossref; the DOI of the paper you download goes to OpenAlex; the download itself goes to the publisher, your library proxy or EBSCO, as it would if you clicked the link yourself. When you click its button, it reads the address and article tags of the page you are on, and that stays in your browser. Settings stay in the browser. It uses the sessions you are already signed in to and never sees a password. Details: [PRIVACY.md](PRIVACY.md).
 
-Permissions it asks for: **activeTab** (read the page you click the button on), **downloads** (save the PDF), **storage** (settings), and **scripting on ebsco.com** (run the search on the EBSCO page).
+Permissions it asks for: **activeTab** (read the page you click the button on), **downloads** (save the PDF), **storage** (settings), and **scripting on ebsco.com** (run the search on the EBSCO page). Optionally, and only if you allow it when asked: **your library proxy's site**, to show whether you are signed in.
 
 ## Disclaimer
 
