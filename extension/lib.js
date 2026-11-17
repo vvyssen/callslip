@@ -9,6 +9,8 @@ export function sleep(ms) {
 
 export function normalizeTitle(value) {
   return (value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "") // accents off: "Cahlíková" -> "Cahlikova"
     .toLowerCase()
     .replace(/<[^>]+>/g, " ")
     .replace(/[‐‑‒–—―]/g, "-")
@@ -176,6 +178,23 @@ export function parseDoi(value) {
   return match ? match[0].replace(/[.,;:)\]]+$/, "") : null;
 }
 
+// The DOI in an article page's address, such as /doi/full/10.1287/mnsc.2019.3426
+// or /content/pdf/10.1007/s10479-019-03454-4.pdf. Null when there is none.
+export function doiFromUrl(value) {
+  let path;
+  try {
+    path = decodeURIComponent(new URL(value).pathname);
+  } catch {
+    return null;
+  }
+  const match = path.match(/10\.\d{4,9}\/[^\s"'<>]+/);
+  if (!match) return null;
+  return match[0]
+    .replace(/\/(pdf|epdf|full|abs|abstract|meta|html)$/i, "") // a view of the article, not part of the DOI
+    .replace(/\.pdf$/i, "")
+    .replace(/[.,;:)\]]+$/, "");
+}
+
 // Publishers whose PDF address follows from the DOI alone. `prefixes` are DOI
 // prefixes; most of these sites run the same platform and share /doi/pdf/<doi>.
 const atypon = (host) => (doi) => `https://${host}/doi/pdf/${doi}`;
@@ -230,6 +249,26 @@ export function publisherPdfUrl(doi) {
   return publisher ? publisher.pdf(doi) : null;
 }
 
+// The publisher's PDF address as seen from the page you are on, when that page
+// is the publisher's site read through a library proxy. Such proxies rewrite
+// pubsonline.informs.org into pubsonline-informs-org.<proxy host>, and the
+// session you are signed in to lives on that host. Null when the page is not
+// a proxied copy of this DOI's publisher.
+export function pdfNear(doi, pageUrl) {
+  const direct = publisherPdfUrl(doi);
+  if (!direct) return null;
+  try {
+    const page = new URL(pageUrl);
+    const pdf = new URL(direct);
+    if (!page.hostname.startsWith(`${pdf.hostname.replaceAll(".", "-")}.`)) return null;
+    pdf.protocol = page.protocol;
+    pdf.host = page.host;
+    return pdf.href;
+  } catch {
+    return null;
+  }
+}
+
 // ---- library proxy ----
 //
 // A library proxy is reached through a sign-in link that takes the address you
@@ -254,6 +293,19 @@ export function normalizeProxy(value) {
   }
   const path = url.pathname.replace(/\/+$/, "");
   return `${url.origin}${path || "/login"}?url=`;
+}
+
+// The proxy link of the library whose sign-in page this is, or null. EZproxy
+// sign-in pages look like <host>/login?url=<the address you wanted>.
+export function proxyFromUrl(value) {
+  try {
+    const url = new URL(value);
+    const target = url.searchParams.get("url") || url.searchParams.get("qurl") || "";
+    if (!/\/login\/?$/.test(url.pathname) || !/^https?:\/\//i.test(target)) return null;
+    return normalizeProxy(value);
+  } catch {
+    return null;
+  }
 }
 
 export function proxied(proxy, target) {

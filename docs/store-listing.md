@@ -9,13 +9,16 @@ Paper Fetch
 
 ## Summary (132 characters max)
 
-Paste a paper's title or DOI and save the PDF through your campus network, library proxy, EBSCO, or an open-access copy.
+One-click PDFs for INFORMS journals. Other papers through the publisher, your library proxy, EBSCO, or open access.
 
 ## Description
 
-Paste a paper's title or DOI. Paper Fetch looks it up on Crossref, shows the matches, and saves the PDF using the access you already have.
+On an article in Management Science, Operations Research, M&SOM or any other INFORMS journal, click Paper Fetch and press Enter: the paper is recognised from the page and saved as a properly named PDF. On an issue or a search results page, the papers on the page are listed for you to pick from.
 
-It tries four routes in order and stops at the first that returns a PDF:
+It works for other papers too. Open it on another publisher's article page, or paste any title or DOI; the paper is looked up on Crossref and the matches are listed.
+
+It uses the access you already have, trying these routes in order and stopping at the first that returns a PDF:
+• the PDF link of the page you are on
 • the publisher's site, if you are on campus or on the university VPN
 • your library's proxy (EZproxy), if you are signed in
 • EBSCO, if your library subscribes
@@ -27,7 +30,7 @@ When no route works, the popup says what each one ran into and gives you a link 
 
 Paper Fetch does not get around paywalls. It only reaches what your own library subscriptions or open access already give you. It has no server and no analytics, and it never sees your password.
 
-Setup: on campus it needs none. Off campus, paste your library's proxy sign-in link into the settings page.
+Setup: on campus it needs none. Off campus, type your university's name in settings and pick it from the list of about 1,500 libraries.
 
 ## Category
 
@@ -35,10 +38,11 @@ Workflow & Planning (or Education)
 
 ## Single purpose
 
-Find a scholarly paper by title or DOI and download its PDF through the user's existing access.
+Download the PDF of a scholarly paper, recognised from the page the user is on or found by title or DOI, through the user's existing access.
 
 ## Permission justifications
 
+- activeTab: when the user clicks the toolbar button, reads the current page's address, its article meta tags (DOI, PDF link) and article links, to recognise the paper on that page.
 - downloads: saves the paper's PDF, and checks the finished download so that a sign-in page is not kept as if it were the paper.
 - storage: keeps the user's settings (library proxy link, EBSCO customer code, download folder, auto-download preferences) and the last search.
 - scripting: runs the search and presses the download button on the EBSCO page in a background tab, on the user's request.
@@ -46,7 +50,7 @@ Find a scholarly paper by title or DOI and download its PDF through the user's e
 
 ## Data usage
 
-Collects no user data. The search text goes to Crossref and the DOI to OpenAlex to perform the lookup the user asked for; nothing is sent to the developer. No remote code.
+Collects no user data. The search text goes to Crossref and the DOI to OpenAlex to perform the lookup the user asked for; the settings page fetches a public list of library proxies from libproxy-db.org when the user searches for their university. Nothing is sent to the developer. No remote code.
 
 ## Privacy policy
 

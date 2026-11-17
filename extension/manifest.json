@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Paper Fetch",
-  "version": "0.3.0",
-  "description": "Find a paper by title or DOI and save the PDF through the publisher, your library proxy, EBSCO, or open access.",
+  "version": "0.4.0",
+  "description": "One-click PDFs for INFORMS journals. Other papers through the publisher, your library proxy, EBSCO, or open access.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon16.png",
@@ -11,6 +11,7 @@
     "128": "icons/icon128.png"
   },
   "permissions": [
+    "activeTab",
     "downloads",
     "storage",
     "scripting"

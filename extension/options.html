@@ -27,18 +27,23 @@
       </p>
 
       <div class="setting">
-        <label for="proxy">Library proxy link</label>
+        <label for="school">Library proxy</label>
+        <div class="finder">
+          <input id="school" class="input" spellcheck="false" autocomplete="off" placeholder="Find your university"
+                 role="combobox" aria-controls="schools" aria-expanded="false" aria-autocomplete="list">
+          <ul id="schools" class="finder-list" role="listbox" hidden></ul>
+        </div>
         <div class="control">
-          <input id="proxy" class="input" spellcheck="false" placeholder="https://login.ezproxy.youruni.edu/login?url=">
+          <input id="proxy" class="input" spellcheck="false" aria-label="Library proxy link" placeholder="https://login.ezproxy.youruni.edu/login?url=">
           <button id="openProxy" class="btn" type="button">Sign in</button>
         </div>
-        <p class="hint">
-          Your library's EZproxy sign-in link, the one that ends in <code>url=</code>. It
-          usually looks like <code>login.ezproxy.youruni.edu/login?url=</code> or
-          <code>youruni.idm.oclc.org/login?url=</code>. You can paste any link from your
-          library's site that goes through the proxy and it is trimmed for you. Leave blank
-          if you have none.
+        <p id="proxyNote" class="hint">
+          Pick your university and its proxy link is filled in. Not listed? Paste the link
+          yourself: it is your library's EZproxy sign-in address, ending in <code>url=</code>,
+          and any library link that goes through the proxy will do. Then press Sign in to
+          check it opens your library's sign-in page.
         </p>
+        <p class="hint credit">University list from libproxy-db.org, fetched when you search.</p>
       </div>
 
       <div class="setting">

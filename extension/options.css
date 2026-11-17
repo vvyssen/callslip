@@ -95,6 +95,63 @@
   flex: 1;
 }
 
+.finder {
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.finder .input {
+  width: 100%;
+}
+
+.finder-list {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 264px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  list-style: none;
+}
+
+.finder-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: default;
+}
+
+.finder-list li:hover {
+  background: var(--inset);
+}
+
+.finder-list li[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+.finder-list .where {
+  flex: none;
+  color: var(--muted);
+}
+
+.finder-list .none {
+  color: var(--muted);
+}
+
+.credit {
+  margin-top: 4px;
+  font-size: 11.5px;
+}
+
 .hint {
   margin: 7px 0 0;
   font-size: 12px;

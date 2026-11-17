@@ -1,4 +1,4 @@
-import { publisherOf, parseDoi } from "./lib.js";
+import { publisherOf, parseDoi, doiFromUrl, pdfNear, proxyFromUrl } from "./lib.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,17 +43,105 @@ const TYPE_LABELS = {
   component: "Supplement",
 };
 
-const GUIDE = "Finds the paper on Crossref, then tries the publisher, your library proxy, EBSCO and open access.";
+const GUIDE = "On an article page the paper is picked up for you. Anywhere else, paste a title or DOI.";
+
 const state = {
   settings: { autoThreshold: 0.9, autoMargin: 0.05, autoDefault: false, proxy: "", ebscoCustomer: "" },
+  page: null, // what the tab the popup was opened on has to offer
   candidates: [],
+  heading: "", // overrides the "N matches" line above the list
   selected: -1,
-  searchedKey: null, // the form contents the current list was fetched for
+  searchedKey: null, // the form contents the current list belongs to
   searching: false,
   starting: false, // download requested, first progress not in yet
   job: null,
   note: "", // one-off message for the action bar
 };
+
+// --------------------------------------------------------------- the page
+//
+// Opening the popup grants access to the tab it was opened on (activeTab), so
+// the paper on that page, or the papers it lists, can be offered without any
+// typing.
+
+// Runs inside the page. Reads the tags scholarly sites publish for search
+// engines, and the article links on listing pages (an issue, search results).
+function scanPage() {
+  const DOI = /10\.\d{4,9}\/[^\s"'<>?#]+/;
+  const tags = {};
+  for (const node of document.querySelectorAll("meta[content]")) {
+    const key = (node.getAttribute("name") || node.getAttribute("property") || "").toLowerCase();
+    if (key) (tags[key] ||= []).push(node.getAttribute("content").trim());
+  }
+  const all = (...keys) => keys.flatMap((key) => tags[key] || []);
+  const doi = (all("citation_doi", "prism.doi", "dc.identifier.doi", "bepress_citation_doi", "dc.identifier")
+    .map((value) => value.match(DOI))
+    .find(Boolean) || [""])[0];
+
+  const titles = new Map();
+  for (const link of document.querySelectorAll("a[href]")) {
+    let found;
+    try {
+      found = decodeURIComponent(new URL(link.href).pathname).match(DOI);
+    } catch {
+      continue;
+    }
+    if (!found) continue;
+    const text = (link.textContent || "").replace(/\s+/g, " ").trim();
+    // Keep the link that carries the title; skip "PDF", "Abstract" and the like.
+    if (text.length < 12 || !text.includes(" ")) continue;
+    if (/^(pdf|e?pub|abstract|full[- ]?text|references|download|view|read|preview|first page|supplement|cited by|permissions|google scholar|crossref)\b/i.test(text)) continue;
+    const id = found[0].replace(/\/(pdf|epdf|full|abs|abstract|meta|html)$/i, "").replace(/\.pdf$/i, "");
+    if ((titles.get(id) || "").length < text.length) titles.set(id, text);
+  }
+  return {
+    doi,
+    pdf: all("citation_pdf_url")[0] || "",
+    items: [...titles].slice(0, 40).map(([id, title]) => ({ doi: id, title })),
+  };
+}
+
+async function readPage() {
+  let tab;
+  try {
+    // "?tab=<id>" lets a test open the popup as an ordinary tab and still say
+    // which tab it is "on".
+    const named = new URLSearchParams(location.search).get("tab");
+    tab = named
+      ? await chrome.tabs.get(Number(named))
+      : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+  } catch {
+    return null;
+  }
+  if (!/^https?:\/\//i.test(tab?.url || "")) return null;
+  let scan = null;
+  try {
+    const [injected] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: scanPage });
+    scan = injected?.result || null;
+  } catch {
+    // Chrome's PDF viewer and a few protected pages cannot be read; the
+    // address alone often still names the paper.
+  }
+  const doi = scan?.doi || doiFromUrl(tab.url) || "";
+  return {
+    url: tab.url,
+    doi,
+    pdf: /^https?:\/\//i.test(scan?.pdf || "") ? scan.pdf : (doi && pdfNear(doi, tab.url)) || "",
+    items: scan?.items || [],
+    proxy: proxyFromUrl(tab.url),
+  };
+}
+
+const sameDoi = (a, b) => Boolean(a) && Boolean(b) && a.toLowerCase() === b.toLowerCase();
+
+// When the list is the paper of the page we are on, say so and let the
+// download start from that page's own PDF link.
+function claimPagePaper() {
+  const [only, ...others] = state.candidates;
+  if (others.length || !sameDoi(only?.doi, state.page?.doi)) return;
+  only.pagePdf = state.page.pdf;
+  state.heading = "On this page";
+}
 
 // ------------------------------------------------------------------- form
 
@@ -91,6 +179,25 @@ function setNotice(text, kind = "") {
   }
 }
 
+// Opened on the library's own sign-in page with no proxy set up yet: that page
+// is the proxy link, so offer to keep it.
+function offerProxy() {
+  const offer = $("offer");
+  const link = state.page?.proxy;
+  offer.hidden = !link || Boolean(state.settings.proxy);
+  if (offer.hidden) return;
+  offer.textContent = `This is your library's sign-in page (${new URL(link).hostname}). `;
+  const use = el("button", "link", "Use it for downloads");
+  use.type = "button";
+  use.addEventListener("click", async () => {
+    const response = await send({ type: "settings:set", settings: { proxy: link } });
+    if (response?.settings) state.settings = { ...state.settings, ...response.settings };
+    offer.textContent = "Library proxy saved. Sign in on this page, then come back.";
+    if ($("notice").textContent.startsWith(GUIDE)) setNotice(GUIDE);
+  });
+  offer.append(use, ".");
+}
+
 // ---------------------------------------------------------------- matches
 
 function authorLine(candidate) {
@@ -110,14 +217,18 @@ function matchRow(candidate, index) {
 
   const title = el("div", "item-title", candidate.title);
   title.title = candidate.title;
+  item.append(title);
 
-  const value = candidate.score || 0;
-  const score = el(
-    "span",
-    "score " + (value >= 0.9 ? "high" : value >= 0.7 ? "mid" : "low"),
-    candidate.exact ? "DOI" : `${Math.round(value * 100)}%`,
-  );
-  score.title = candidate.exact ? "Looked up by DOI" : "How closely the title matches";
+  if (candidate.score !== undefined) {
+    const value = candidate.score;
+    const score = el(
+      "span",
+      "score " + (value >= 0.9 ? "high" : value >= 0.7 ? "mid" : "low"),
+      candidate.exact ? "DOI" : `${Math.round(value * 100)}%`,
+    );
+    score.title = candidate.exact ? "Looked up by DOI" : "How closely the title matches";
+    item.append(score);
+  }
 
   const meta = el("div", "item-meta");
   meta.append([authorLine(candidate), candidate.year].filter(Boolean).join(" · "));
@@ -125,6 +236,7 @@ function matchRow(candidate, index) {
     if (meta.textContent) meta.append(" · ");
     meta.append(el("i", "", candidate.journal));
   }
+  if (meta.textContent) item.append(meta);
 
   const foot = el("div", "item-foot");
   const publisher = publisherOf(candidate.doi);
@@ -141,8 +253,8 @@ function matchRow(candidate, index) {
   doi.title = "Open the article page";
   doi.addEventListener("click", (event) => event.stopPropagation());
   foot.append(doi);
+  item.append(foot);
 
-  item.append(title, score, meta, foot);
   item.addEventListener("click", () => select(index));
   item.addEventListener("dblclick", () => {
     select(index);
@@ -158,9 +270,9 @@ function renderMatches() {
   $("matches").hidden = state.candidates.length === 0;
   if (!state.candidates.length) return;
   const count = state.candidates.length;
-  $("count").textContent = state.candidates[0].exact
-    ? "DOI match"
-    : `${count} ${count === 1 ? "match" : "matches"}`;
+  $("count").textContent =
+    state.heading ||
+    (state.candidates[0].exact ? "DOI match" : `${count} ${count === 1 ? "match" : "matches"}`);
   list.append(...state.candidates.map(matchRow));
 }
 
@@ -176,6 +288,20 @@ function select(index, { keep = false } = {}) {
   list.children[index].scrollIntoView({ block: "nearest" });
   chrome.storage.session.set({ selectedDoi: state.candidates[index].doi });
   renderFoot();
+}
+
+// The papers a listing page links to, straight from the page. Their authors
+// and year are looked up when one is downloaded.
+function showPageList(items) {
+  state.candidates = items.map((item) => ({ ...item, authors: [], families: [], year: null, journal: "", type: "" }));
+  state.heading = `${items.length} papers on this page`;
+  state.searchedKey = queryKey(formQuery());
+  // An earlier download's result stays only if it is one of these papers.
+  const finished = state.job && state.job.status !== "running" ? state.job.candidate.doi : null;
+  if (finished && !items.some((item) => sameDoi(item.doi, finished))) chrome.storage.session.remove("job");
+  setNotice("");
+  renderMatches();
+  select(0);
 }
 
 // --------------------------------------------------------------- download
@@ -266,7 +392,7 @@ function renderFoot() {
   const active = jobActive();
   const retry =
     state.job?.status === "failed" &&
-    state.job.candidate.doi === state.candidates[state.selected]?.doi;
+    sameDoi(state.job.candidate.doi, state.candidates[state.selected]?.doi);
   button.disabled = active || state.selected < 0;
   button.textContent = "";
   if (active) button.append(el("span", "spinner"));
@@ -280,6 +406,8 @@ function renderFoot() {
     hint.textContent = state.note;
   } else if (!listIsCurrent()) {
     hint.append(el("kbd", "", "⏎"), " search again");
+  } else if (state.candidates.length === 1) {
+    hint.append(el("kbd", "", "⏎"), " download");
   } else {
     hint.append(el("kbd", "", "↑"), el("kbd", "", "↓"), " choose", el("span", "sep", "·"), el("kbd", "", "⏎"), " download");
   }
@@ -323,6 +451,7 @@ function setSearching(value) {
 
 function resetList() {
   state.candidates = [];
+  state.heading = "";
   state.selected = -1;
   state.searchedKey = null;
   state.note = "";
@@ -330,7 +459,9 @@ function resetList() {
   renderFoot();
 }
 
-async function runSearch() {
+// `auto` is off when the search was not asked for, such as the lookup of the
+// page the popup opened on: recognising a paper must not start a download.
+async function runSearch({ auto = true } = {}) {
   if (state.searching) return;
   const query = formQuery();
   if (!query.title) {
@@ -356,9 +487,10 @@ async function runSearch() {
       return;
     }
     setNotice("");
+    claimPagePaper();
     renderMatches();
     select(0);
-    if ($("auto").checked) {
+    if (auto && $("auto").checked) {
       if (isConfident()) {
         download();
       } else {
@@ -468,34 +600,56 @@ function bindEvents() {
   });
 }
 
+function restore(last, selectedDoi) {
+  $("title").value = last.query.title || "";
+  $("author").value = last.query.author || "";
+  $("year").value = last.query.year || "";
+  state.candidates = last.candidates;
+  state.searchedKey = queryKey(formQuery());
+  setNotice("");
+  claimPagePaper();
+  renderMatches();
+  const index = state.candidates.findIndex((candidate) => candidate.doi === selectedDoi);
+  select(index < 0 ? 0 : index);
+}
+
 async function init() {
   bindEvents();
   setNotice(GUIDE);
 
-  const [response, session] = await Promise.all([
+  const [response, session, page] = await Promise.all([
     send({ type: "settings:get" }),
     chrome.storage.session.get(["lastSearch", "selectedDoi", "job"]),
+    readPage(),
   ]);
   if (response?.settings) state.settings = { ...state.settings, ...response.settings };
   $("auto").checked = Boolean(state.settings.autoDefault);
+  state.page = page;
   setNotice(GUIDE); // again, now that we know whether a library is set up
+  offerProxy();
 
-  // Pick up where the popup was closed: the last list, and any download that
-  // carried on in the background.
-  const last = session.lastSearch;
-  if (last?.candidates?.length) {
-    $("title").value = last.query.title || "";
-    $("author").value = last.query.author || "";
-    $("year").value = last.query.year || "";
-    state.candidates = last.candidates;
-    state.searchedKey = queryKey(formQuery());
-    setNotice("");
-    renderMatches();
-    const index = state.candidates.findIndex((candidate) => candidate.doi === session.selectedDoi);
-    select(index < 0 ? 0 : index);
-  }
   state.job = session.job || null;
   renderJob();
+
+  // What to show, most specific first: the paper on this page, the papers this
+  // page lists, or wherever the popup was when it was last closed.
+  const last = session.lastSearch?.candidates?.length ? session.lastSearch : null;
+  const lastIsThisPage =
+    last?.candidates.length === 1 && sameDoi(last.candidates[0].doi, page?.doi);
+  if (page?.doi && !lastIsThisPage) {
+    $("title").value = page.doi;
+    fitTitle();
+    await runSearch({ auto: false });
+    if (!state.candidates.length) {
+      // Not a paper Crossref knows: say nothing and start blank.
+      $("title").value = "";
+      setNotice(GUIDE);
+    }
+  } else if (!page?.doi && page?.items.length >= 2) {
+    showPageList(page.items);
+  } else if (last) {
+    restore(last, session.selectedDoi);
+  }
   renderFoot();
 
   fitTitle();

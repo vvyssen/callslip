@@ -171,6 +171,12 @@ async function saveFrom(url, candidate, settings) {
   return { downloadId: id, filename: item.filename };
 }
 
+// The PDF link of the article page the popup was opened on. It carries
+// whatever access that page has: campus network, proxy session, or a login.
+async function viaPage(candidate, settings) {
+  return saveFrom(candidate.pagePdf, candidate, settings);
+}
+
 async function viaPublisher(candidate, settings) {
   return saveFrom(publisherPdfUrl(candidate.doi), candidate, settings);
 }
@@ -466,7 +472,11 @@ async function readJob() {
 function planSteps(candidate, settings) {
   const publisher = publisherOf(candidate.doi);
   const skip = (detail) => ({ state: "skipped", detail });
+  const fromPage = /^https?:\/\//i.test(candidate.pagePdf || "")
+    ? [{ key: "page", label: "This page", state: "pending" }]
+    : [];
   return [
+    ...fromPage,
     {
       key: "publisher",
       label: publisher ? publisher.name : "Publisher",
@@ -487,6 +497,7 @@ function planSteps(candidate, settings) {
 }
 
 const RUNNERS = {
+  page: viaPage,
   publisher: viaPublisher,
   proxy: viaProxy,
   ebsco: viaEbsco,
@@ -548,6 +559,12 @@ async function startDownload(candidate) {
   if (running) return { error: "A download is already in progress." };
   running = true;
   try {
+    // A paper picked from a list on a web page comes with a title only; the
+    // file name needs its author and year.
+    if (!candidate.authors?.length || !candidate.year) {
+      const record = await crossrefByDoi(candidate.doi).catch(() => null);
+      if (record) candidate = { ...candidate, ...record };
+    }
     return { job: await runJob(candidate) };
   } finally {
     running = false;

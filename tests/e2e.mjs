@@ -6,12 +6,12 @@
 // Sites that need a library login are replaced by stand-ins (fake-sites.mjs).
 // Crossref, OpenAlex and two open-access articles are the real thing, so the
 // test needs a network connection. Requires Chrome and openssl.
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launch, sleep } from "./cdp.mjs";
-import { startFakeSites, PROXY_LINK } from "./fake-sites.mjs";
+import { startFakeSites, PROXY_LINK, PAGE_PERMISSIONS, INFORMS, NO_PATTERN } from "./fake-sites.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const shotsAt = process.argv.indexOf("--shots");
@@ -41,6 +41,14 @@ const check = (name, ok, detail = "") => {
 const saved = () => readdirSync(downloads).sort();
 const isPdf = (name) => readFileSync(join(downloads, name)).subarray(0, 5).toString() === "%PDF-";
 
+// The extension under test is a copy that may read the stand-in article pages,
+// which is what clicking the toolbar button on such a page grants for real.
+const extension = join(work, "extension");
+cpSync(join(root, "extension"), extension, { recursive: true });
+const manifest = JSON.parse(readFileSync(join(extension, "manifest.json"), "utf8"));
+manifest.host_permissions.push(...PAGE_PERMISSIONS);
+writeFileSync(join(extension, "manifest.json"), JSON.stringify(manifest));
+
 const fake = await startFakeSites({ dir: work, port: 8443, ebscoTitle: IN_EBSCO.title });
 const browser = await launch({ profile: join(work, "profile"), downloads, extraArgs: fake.chromeArgs });
 const errors = [];
@@ -60,7 +68,9 @@ const click = (page, id) => evaluate(page, `(document.getElementById('${id}').cl
 const message = (page, payload) => evaluate(page, `chrome.runtime.sendMessage(${JSON.stringify(payload)})`);
 const job = (page) => evaluate(page, "chrome.storage.session.get('job').then((data) => data.job || null)");
 const stepOf = (result, name) => result.steps.find((step) => step.key === name);
+const routes = (result) => JSON.stringify(result.steps.map((step) => [step.key, step.state, step.detail]));
 const snap = (page, name, options) => (shots ? browser.shot(page, join(shots, name), options) : null);
+const listed = (page) => waitFor(page, "!document.getElementById('search').disabled && document.querySelectorAll('#results .item').length > 0", 40000);
 
 async function type(page, value) {
   await evaluate(page, `(() => { const t = document.getElementById('title'); t.focus(); t.value = ''; t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
@@ -70,7 +80,7 @@ async function type(page, value) {
 async function search(page, value) {
   await type(page, value);
   await key(page, "Enter");
-  await waitFor(page, "!document.getElementById('search').disabled && document.querySelectorAll('#results .item').length > 0", 40000);
+  await listed(page);
   await sleep(200);
 }
 
@@ -85,15 +95,25 @@ async function download(page, start) {
 }
 
 try {
-  const id = await browser.loadExtension(join(root, "extension"));
+  const id = await browser.loadExtension(extension);
+  const popupUrl = `chrome-extension://${id}/popup.html`;
   await sleep(1200);
   const worker = (await browser.targets()).find((target) => target.type === "service_worker" && target.url.includes(id));
   check("service worker starts", Boolean(worker));
   await browser.attach(worker.targetId);
   check("first install opens the settings page", (await browser.targets()).some((target) => target.url.endsWith("/options.html")));
 
+  // Opens a web page, then the popup "on" it, as clicking the toolbar button
+  // on that page would.
+  async function popupOn(url) {
+    const page = await browser.open(url);
+    await waitFor(page, "document.readyState === 'complete'", 15000);
+    const tabId = await evaluate(popup, `chrome.tabs.query({}).then((tabs) => tabs.find((tab) => tab.url === ${JSON.stringify(url)})?.id)`);
+    return browser.open(`${popupUrl}?tab=${tabId}`);
+  }
+
   // ------------------------------------------------ popup, nothing set up yet
-  const popup = await browser.open(`chrome-extension://${id}/popup.html`);
+  const popup = await browser.open(popupUrl);
   await waitFor(popup, "document.querySelector('#notice .link')", 8000).catch(() => {});
   check("first run points at library setup", (await text(popup, "notice")).includes("Set up library access"));
   check("title field has focus", await evaluate(popup, "document.activeElement.id === 'title'"));
@@ -110,12 +130,12 @@ try {
   const meta = await evaluate(popup, "document.querySelector('#results .item-meta').textContent");
   check("match line shows the year", /\b(19|20)\d\d\b/.test(meta), meta);
   check("top match is selected", await evaluate(popup, "document.querySelector('#results .item').getAttribute('aria-selected') === 'true'"));
+  await browser.send("Emulation.setDeviceMetricsOverride", { width: 420, height: 600, deviceScaleFactor: 2, mobile: false }, popup);
   const layout = await evaluate(popup, `(() => {
     const app = document.querySelector('.app').getBoundingClientRect();
     const foot = document.getElementById('foot').getBoundingClientRect();
     return { height: Math.round(app.height), footBottom: Math.round(foot.bottom), pageScrolls: document.documentElement.scrollHeight > 600 };
   })()`);
-  await browser.send("Emulation.setDeviceMetricsOverride", { width: 420, height: 600, deviceScaleFactor: 2, mobile: false }, popup);
   check("popup stays within 600px with the action bar visible", layout.height <= 600 && layout.footBottom <= 600 && !layout.pageScrolls, JSON.stringify(layout));
   await snap(popup, "popup-results.png");
   await snap(popup, "popup-results-dark.png", { dark: true });
@@ -140,7 +160,7 @@ try {
 
   // ------------------------------------------------ every route refuses
   let result = await download(popup, () => key(popup, "Enter"));
-  console.log("      ", JSON.stringify(result.steps.map((step) => [step.key, step.state, step.detail])));
+  console.log("      ", routes(result));
   check("a paywall page is not accepted as the paper", stepOf(result, "publisher").state === "failed" && stepOf(result, "publisher").detail === "got a web page, not a PDF", stepOf(result, "publisher").detail);
   check("proxy is skipped until it is set up", stepOf(result, "proxy").state === "skipped");
   check("EBSCO record with another title is not taken", stepOf(result, "ebsco").detail === "no matching record", stepOf(result, "ebsco").detail);
@@ -149,9 +169,33 @@ try {
     check("failure offers the article page", result.fallback?.url === `https://doi.org/${PAYWALLED.doi}`, JSON.stringify(result.fallback));
   }
   check("EBSCO customer code found and remembered", (await message(popup, { type: "settings:get" })).settings.ebscoCustomer === "test1");
-
-  // ------------------------------------------------ set up the proxy in settings
   check("open settings page picks up the detected code", (await evaluate(options, "document.getElementById('customer').value")) === "test1");
+
+  // ------------------------------------------------ three ways to set the proxy
+  // 1. Opening the popup on the library's own sign-in page.
+  const onSignIn = await popupOn(`${PROXY_LINK}https://pubsonline.informs.org/doi/${INFORMS[0].doi}`);
+  await waitFor(onSignIn, "!document.getElementById('offer').hidden", 8000);
+  await evaluate(onSignIn, "(document.querySelector('#offer .link').click(), true)");
+  await sleep(500);
+  let settings = (await message(options, { type: "settings:get" })).settings;
+  check("sign-in page is offered as the proxy and saved in one click", settings.proxy === PROXY_LINK, settings.proxy);
+  check("saving one setting leaves the others alone", settings.ebscoCustomer === "test1", settings.ebscoCustomer);
+
+  // 2. Looking the university up by name.
+  await message(options, { type: "settings:set", settings: { proxy: "" } });
+  await evaluate(options, "(document.getElementById('school').focus(), true)");
+  await browser.send("Input.insertText", { text: "test uni" }, options);
+  await waitFor(options, "document.querySelectorAll('#schools [role=option]').length > 0", 10000);
+  const offered = await evaluate(options, "[...document.querySelectorAll('#schools [role=option]')].map((row) => row.textContent)");
+  check("university search lists the match and leaves out unusable entries", offered.length === 1 && offered[0].startsWith("Test University"), JSON.stringify(offered));
+  await snap(options, "settings-finder.png", { width: 720, maxHeight: 1000, full: true });
+  await snap(options, "reset.png", { width: 720, maxHeight: 1000 });
+  await key(options, "Enter");
+  await sleep(500);
+  settings = (await message(options, { type: "settings:get" })).settings;
+  check("picking a university fills in and saves its proxy link", settings.proxy === PROXY_LINK && (await evaluate(options, "document.getElementById('proxy').value")) === PROXY_LINK, settings.proxy);
+
+  // 3. Pasting any link that goes through the proxy.
   await evaluate(options, `(async () => {
     const field = document.getElementById('proxy');
     field.value = 'login.ezproxy.test-uni.edu/login?url=https://www.jstor.org/stable/1';
@@ -159,9 +203,8 @@ try {
     await new Promise((done) => setTimeout(done, 500));
     return true;
   })()`);
-  let settings = (await message(options, { type: "settings:get" })).settings;
+  settings = (await message(options, { type: "settings:get" })).settings;
   check("a pasted proxied link is trimmed to the sign-in link", settings.proxy === PROXY_LINK, settings.proxy);
-  check("saving one setting leaves the others alone", settings.ebscoCustomer === "test1", settings.ebscoCustomer);
 
   // signed out of the proxy
   result = await download(popup, () => click(popup, "download"));
@@ -184,12 +227,60 @@ try {
   check("file is named by cite key and is a PDF", result.filename === PAYWALLED.file && saved().includes(PAYWALLED.file) && isPdf(PAYWALLED.file), result.filename);
   await snap(popup, "popup-saved.png");
 
+  // ------------------------------------------------ opened on an article page
+  // INFORMS, off campus: the paper is recognised, the publisher refuses, the proxy delivers.
+  await message(popup, { type: "settings:set", settings: { autoDefault: true } });
+  let onPage = await popupOn(`https://pubsonline.informs.org/doi/${INFORMS[0].doi}`);
+  await listed(onPage);
+  check("an INFORMS article page is recognised", (await text(onPage, "count")) === "On this page" && (await evaluate(onPage, "document.querySelector('.item-title').textContent")) === INFORMS[0].title, await text(onPage, "count"));
+  check("it is marked as an INFORMS paper", (await evaluate(onPage, "document.querySelector('.tag.pub')?.textContent")) === "INFORMS");
+  await sleep(1500);
+  check("recognising a page never downloads by itself, even with auto-download on", (await job(onPage))?.candidate?.doi !== INFORMS[0].doi);
+  await message(popup, { type: "settings:set", settings: { autoDefault: false } });
+  await evaluate(onPage, "chrome.storage.session.remove('job')");
+  onPage = await popupOn(`https://pubsonline.informs.org/doi/${INFORMS[0].doi}`);
+  await listed(onPage);
+  check("reopening on the same page shows it again without a new lookup", (await text(onPage, "count")) === "On this page");
+  await browser.send("Emulation.setDeviceMetricsOverride", { width: 420, height: 600, deviceScaleFactor: 2, mobile: false }, onPage);
+  await snap(onPage, "popup-on-page.png");
+  result = await download(onPage, () => key(onPage, "Enter"));
+  check("one Enter downloads it", result.status === "done" && result.filename === INFORMS[0].file && isPdf(INFORMS[0].file), `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
+  check("through the proxy, since the publisher's own link is paywalled", result.provider === "Library proxy" && stepOf(result, "publisher").state === "failed", routes(result));
+
+  // The same site read through the library proxy: the page's own PDF link works.
+  onPage = await popupOn(`https://pubsonline-informs-org.ezproxy.test-uni.edu/doi/full/${INFORMS[1].doi}`);
+  await listed(onPage);
+  check("a proxied INFORMS page is recognised", (await text(onPage, "count")) === "On this page");
+  result = await download(onPage, () => key(onPage, "Enter"));
+  check("and downloaded from that page's own PDF link", result.status === "done" && result.provider === "This page" && result.filename === INFORMS[1].file, `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
+
+  // An issue page: every article it links to is listed.
+  onPage = await popupOn("https://pubsonline.informs.org/toc/mnsc/66/1");
+  await waitFor(onPage, "document.querySelectorAll('#results .item').length > 0", 15000);
+  const issue = await evaluate(onPage, "[...document.querySelectorAll('.item-title')].map((node) => node.textContent)");
+  check("an issue page lists its papers", (await text(onPage, "count")) === "3 papers on this page" && JSON.stringify(issue) === JSON.stringify(INFORMS.map((paper) => paper.title)), JSON.stringify(issue));
+  check("the last download's result stays while it is one of the listed papers", await evaluate(onPage, "!document.getElementById('job').hidden"));
+  await evaluate(onPage, "chrome.storage.session.remove('job')");
+  await sleep(300);
+  await browser.send("Emulation.setDeviceMetricsOverride", { width: 420, height: 600, deviceScaleFactor: 2, mobile: false }, onPage);
+  await snap(onPage, "popup-page-list.png");
+  await key(onPage, "ArrowDown");
+  await key(onPage, "ArrowDown");
+  result = await download(onPage, () => key(onPage, "Enter"));
+  check("a paper picked from the list gets its author and year looked up", result.status === "done" && result.filename === INFORMS[2].file, `${result.status} ${result.filename || ""} ${routes(result)}`);
+
+  // A publisher we have no address pattern for, but whose page names its PDF.
+  onPage = await popupOn(NO_PATTERN.page);
+  await listed(onPage);
+  result = await download(onPage, () => key(onPage, "Enter"));
+  check("a page's citation_pdf_url is used when the publisher is unknown", result.status === "done" && result.provider === "This page" && result.filename === NO_PATTERN.file, `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
+
   // ------------------------------------------------ EBSCO route
   fake.hits.length = 0;
   await search(popup, IN_EBSCO.doi);
   check("a DOI is looked up directly", (await text(popup, "count")) === "DOI match");
   result = await download(popup, () => key(popup, "Enter"));
-  check("downloads through EBSCO", result.status === "done" && result.provider === "EBSCO", `${result.status} ${result.provider || ""} ${JSON.stringify(result.steps.map((step) => [step.key, step.state, step.detail]))}`);
+  check("downloads through EBSCO", result.status === "done" && result.provider === "EBSCO", `${result.status} ${result.provider || ""} ${routes(result)}`);
   check("EBSCO file renamed to the cite key", result.filename === IN_EBSCO.file && isPdf(IN_EBSCO.file), result.filename);
   check("falls back from DOI to title search", fake.hits.filter((hit) => hit.endsWith("/c/test1/search/advanced")).length === 2);
   check("opens the record whose title matches", fake.hits.some((hit) => hit.includes("/details/right1")) && !fake.hits.some((hit) => hit.includes("/details/wrong1")));
@@ -202,14 +293,14 @@ try {
   // ------------------------------------------------ live open-access routes
   await search(popup, OPEN_ACCESS.doi);
   result = await download(popup, () => key(popup, "Enter"));
-  check("downloads an open-access copy (live)", result.status === "done" && result.provider === "Open access" && isPdf(result.filename), `${result.status} ${result.provider || ""} ${JSON.stringify(result.steps.map((step) => [step.key, step.state, step.detail]))}`);
+  check("downloads an open-access copy (live)", result.status === "done" && result.provider === "Open access" && isPdf(result.filename), `${result.status} ${result.provider || ""} ${routes(result)}`);
 
   await search(popup, OPEN_AT_PUBLISHER.doi);
   result = await download(popup, () => key(popup, "Enter"));
-  check("downloads straight from the publisher (live)", result.status === "done" && result.provider === OPEN_AT_PUBLISHER.publisher && isPdf(result.filename), `${result.status} ${result.provider || ""} ${JSON.stringify(result.steps.map((step) => [step.key, step.state, step.detail]))}`);
+  check("downloads straight from the publisher (live)", result.status === "done" && result.provider === OPEN_AT_PUBLISHER.publisher && isPdf(result.filename), `${result.status} ${result.provider || ""} ${routes(result)}`);
 
   // ------------------------------------------------ popup closed and reopened
-  const reopened = await browser.open(`chrome-extension://${id}/popup.html`);
+  const reopened = await browser.open(popupUrl);
   await waitFor(reopened, "document.querySelectorAll('#results .item').length > 0", 8000);
   check("matches come back when the popup reopens", (await evaluate(reopened, "document.getElementById('title').value")) === OPEN_AT_PUBLISHER.doi);
   check("download result comes back too", await evaluate(reopened, "!document.getElementById('job').hidden"));
@@ -218,7 +309,7 @@ try {
   // ------------------------------------------------ remaining popup behaviour
   await click(popup, "clear");
   await sleep(200);
-  check("Clear empties the list and brings the guidance back", (await evaluate(popup, "document.getElementById('matches').hidden && document.getElementById('foot').hidden")) && (await text(popup, "notice")).startsWith("Finds the paper"));
+  check("Clear empties the list and brings the guidance back", (await evaluate(popup, "document.getElementById('matches').hidden && document.getElementById('foot').hidden")) && (await text(popup, "notice")).startsWith("On an article page"));
 
   const pasted = await evaluate(popup, `(() => {
     const field = document.getElementById('title');

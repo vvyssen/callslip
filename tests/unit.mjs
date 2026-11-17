@@ -44,6 +44,24 @@ eq("doi: link", lib.parseDoi("https://doi.org/10.1371/journal.pone.0115253"), "1
 eq("doi: trailing punctuation", lib.parseDoi("see doi:10.1111/poms.12848)."), "10.1111/poms.12848");
 eq("doi: a title is not a DOI", lib.parseDoi("Supply chain resilience in 10 steps"), null);
 
+// what a page's address gives away
+eq("page doi: INFORMS full text", lib.doiFromUrl("https://pubsonline.informs.org/doi/full/10.1287/mnsc.2019.3426?af=R"), "10.1287/mnsc.2019.3426");
+eq("page doi: PDF open in the viewer", lib.doiFromUrl("https://pubsonline.informs.org/doi/pdf/10.1287/mnsc.2018.3063"), "10.1287/mnsc.2018.3063");
+eq("page doi: proxied host", lib.doiFromUrl("https://pubsonline-informs-org.ezproxy.uni.edu/doi/10.1287/opre.2020.2001"), "10.1287/opre.2020.2001");
+eq("page doi: trailing view is dropped", lib.doiFromUrl("https://iopscience.iop.org/article/10.1088/1674-1137/aea108/meta"), "10.1088/1674-1137/aea108");
+eq("page doi: .pdf is dropped", lib.doiFromUrl("https://link.springer.com/content/pdf/10.1007/s10479-019-03454-4.pdf"), "10.1007/s10479-019-03454-4");
+eq("page doi: encoded slash", lib.doiFromUrl("https://doi.org/10.1287%2Fmnsc.2018.3063"), "10.1287/mnsc.2018.3063");
+eq("page doi: none", lib.doiFromUrl("https://www.nature.com/articles/s41586-020-2649-2"), null);
+eq("page doi: not a web address", lib.doiFromUrl("chrome://extensions"), null);
+eq("pdf near: proxied copy of the publisher", lib.pdfNear("10.1287/mnsc.2018.3063", "https://pubsonline-informs-org.ezproxy.uni.edu/doi/10.1287/mnsc.2018.3063"), "https://pubsonline-informs-org.ezproxy.uni.edu/doi/pdf/10.1287/mnsc.2018.3063");
+eq("pdf near: the publisher itself is left to the publisher route", lib.pdfNear("10.1287/mnsc.2018.3063", "https://pubsonline.informs.org/doi/10.1287/mnsc.2018.3063"), null);
+eq("pdf near: some other site", lib.pdfNear("10.1287/mnsc.2018.3063", "https://scholar.google.com/scholar?q=x"), null);
+eq("pdf near: unknown publisher", lib.pdfNear("10.1016/j.ijpe.2017.12.006", "https://www-sciencedirect-com.ezproxy.uni.edu/x"), null);
+eq("proxy from page: EZproxy sign-in", lib.proxyFromUrl(P + "https://pubsonline.informs.org/doi/10.1287/x"), P);
+eq("proxy from page: qurl form", lib.proxyFromUrl("https://e.edu/login?qurl=https%3A%2F%2Fa.org%2Fb"), "https://e.edu/login?qurl=");
+eq("proxy from page: an ordinary login page is not one", lib.proxyFromUrl("https://example.com/login?url=/dashboard"), null);
+eq("proxy from page: an article page is not one", lib.proxyFromUrl("https://pubsonline.informs.org/doi/10.1287/x"), null);
+
 // matching
 eq("similarity: identical after normalising", lib.titleSimilarity("Supply-Chain Resilience: A Review", "supply chain resilience – a review"), 1);
 near("similarity: one-word title inside a long query stays low", lib.titleSimilarity("Supply chain resilience under disruption risk and uncertainty", "Resilience"), 0, 0.5);
@@ -56,6 +74,9 @@ near("score: year within one adds the bonus", bonus.score - bonus.titleScore, 0.
 
 // file names
 eq("citekey", lib.citeKey({ authors: ["Benjamin R. Tukamuhabwa"], year: 2015, title: "The supply chain" }), "tukamuhabwa2015supply");
+eq("citekey: accents are folded, not dropped", lib.citeKey({ authors: ["Jana Cahlíková"], year: 2020, title: "How Stress Affects Performance" }), "cahlikova2020how");
+eq("citekey: umlaut", lib.citeKey({ authors: ["Rolf Färe"], year: 2018, title: "On technical inefficiency" }), "fare2018technical");
+eq("similarity: accents do not matter", lib.titleSimilarity("Économie de la résilience", "Economie de la resilience"), 1);
 eq("path: no folder", lib.downloadPath({ authors: ["A Smith"], year: 2018, title: "Supply" }, ""), "smith2018supply.pdf");
 eq("path: folder adds the year", lib.downloadPath({ authors: ["A Smith"], year: 2018, title: "Supply" }, "Papers"), "Papers/2018/smith2018supply.pdf");
 eq("path: cannot climb out of Downloads", lib.downloadPath({ authors: ["A Smith"], year: 2018, title: "Supply" }, "../../etc/./x"), "etc/x/2018/smith2018supply.pdf");
