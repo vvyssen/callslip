@@ -1,4 +1,4 @@
-# paper-fetch
+# Paper Fetch
 
 [English](README.md)
 
@@ -68,13 +68,13 @@ https://youruni.idm.oclc.org/login?url=
 
 ## 隐私
 
-paper-fetch 没有自己的服务器，也没有任何统计。你搜索的标题或 DOI 会发给 Crossref；你下载的论文的 DOI 会发给 OpenAlex；下载请求发给出版社、图书馆代理或 EBSCO，和你自己点链接没有区别。设置只存在浏览器里。它用的是你已经登录的会话，接触不到密码。详见 [PRIVACY.md](PRIVACY.md)。
+Paper Fetch 没有自己的服务器，也没有任何统计。你搜索的标题或 DOI 会发给 Crossref；你下载的论文的 DOI 会发给 OpenAlex；下载请求发给出版社、图书馆代理或 EBSCO，和你自己点链接没有区别。设置只存在浏览器里。它用的是你已经登录的会话，接触不到密码。详见 [PRIVACY.md](PRIVACY.md)。
 
 申请的权限：**downloads**（保存 PDF）、**storage**（保存设置）、**在 ebsco.com 上运行脚本**（在 EBSCO 页面上执行搜索）。
 
 ## 请在图书馆的使用条款之内使用
 
-paper-fetch 不绕过付费墙，只能拿到你的订阅或开放获取本来就给你的内容。出版社的许可协议禁止系统性批量下载，图书馆可能因此被停止访问，所以它只在你点的时候下载一篇。
+Paper Fetch 不绕过付费墙，只能拿到你的订阅或开放获取本来就给你的内容。出版社的许可协议禁止系统性批量下载，图书馆可能因此被停止访问，所以它只在你点的时候下载一篇。
 
 ## 开发
 
@@ -83,6 +83,7 @@ node tests/unit.mjs extension      # 标题匹配、文件命名、代理链接�
 node tests/e2e.mjs                 # 在无头 Chrome 里驱动真实扩展
 node tests/e2e.mjs --shots docs/screenshots
 scripts/package.sh                 # 生成 dist/paper-fetch-<版本>.zip
+node scripts/icons.mjs              # 由 icons/icon.svg 重新生成各尺寸 PNG 图标
 ```
 
 端到端测试需要 Chrome、`openssl` 和网络，用的是独立的临时浏览器配置，不会碰你自己的浏览器。

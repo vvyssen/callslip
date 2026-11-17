@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "paper-fetch",
+  "name": "Paper Fetch",
   "version": "0.3.0",
   "description": "Find a paper by title or DOI and save the PDF through the publisher, your library proxy, EBSCO, or open access.",
   "minimum_chrome_version": "116",
@@ -24,7 +24,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "paper-fetch",
+    "default_title": "Paper Fetch",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png"

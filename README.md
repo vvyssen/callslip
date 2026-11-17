@@ -1,4 +1,4 @@
-# paper-fetch
+# Paper Fetch
 
 [中文说明](README.zh-CN.md)
 
@@ -13,7 +13,7 @@ A Chrome extension that finds a paper by title or DOI and saves the PDF, using t
 ## What it does
 
 1. Paste a title or a DOI and press <kbd>Enter</kbd>. The paper is looked up on [Crossref](https://www.crossref.org/) and the matches are listed, best first.
-2. Press <kbd>Enter</kbd> again (or pick another match with <kbd>↑</kbd> <kbd>↓</kbd>). paper-fetch tries these routes in order and stops at the first that returns a PDF:
+2. Press <kbd>Enter</kbd> again (or pick another match with <kbd>↑</kbd> <kbd>↓</kbd>). Paper Fetch tries these routes in order and stops at the first that returns a PDF:
 
    | Route | Works when |
    | --- | --- |
@@ -55,7 +55,7 @@ Search for "*your university* EZproxy prefix", or open any database from your li
 
 ## What is and isn't covered
 
-**Direct publisher downloads** exist for publishers whose PDF address follows from the DOI: Wiley, Springer (incl. Palgrave), Taylor & Francis, Sage, INFORMS, Nature, Science, PNAS, ACS, ACM, SIAM, Academy of Management, University of Chicago Press, Royal Society, ASCE and IOP. For everything else (Elsevier, IEEE, Oxford, Cambridge, JSTOR, …) paper-fetch relies on EBSCO and open access, and otherwise hands you the article page.
+**Direct publisher downloads** exist for publishers whose PDF address follows from the DOI: Wiley, Springer (incl. Palgrave), Taylor & Francis, Sage, INFORMS, Nature, Science, PNAS, ACS, ACM, SIAM, Academy of Management, University of Chicago Press, Royal Society, ASCE and IOP. For everything else (Elsevier, IEEE, Oxford, Cambridge, JSTOR, …) Paper Fetch relies on EBSCO and open access, and otherwise hands you the article page.
 
 **How far it has been tested.** The automated tests run every route against stand-in servers, plus live lookups on Crossref and OpenAlex and live downloads of two open-access articles. In real use it has run against one university's library. Other libraries should work if they use EZproxy or EBSCO, but that is expected, not confirmed. Reports either way are welcome.
 
@@ -68,13 +68,13 @@ Search for "*your university* EZproxy prefix", or open any database from your li
 
 ## Privacy
 
-paper-fetch has no server and no analytics. The title or DOI you search goes to Crossref; the DOI of the paper you download goes to OpenAlex; the download itself goes to the publisher, your library proxy or EBSCO, as it would if you clicked the link yourself. Settings stay in the browser. It uses the sessions you are already signed in to and never sees a password. Details: [PRIVACY.md](PRIVACY.md).
+Paper Fetch has no server and no analytics. The title or DOI you search goes to Crossref; the DOI of the paper you download goes to OpenAlex; the download itself goes to the publisher, your library proxy or EBSCO, as it would if you clicked the link yourself. Settings stay in the browser. It uses the sessions you are already signed in to and never sees a password. Details: [PRIVACY.md](PRIVACY.md).
 
 Permissions it asks for: **downloads** (save the PDF), **storage** (settings), and **scripting on ebsco.com** (to run the search on the EBSCO page).
 
 ## Use it within your library's terms
 
-paper-fetch does not get around paywalls. It only reaches what your own subscriptions or open access already give you. Publisher licences forbid systematic bulk downloading, and libraries can lose access over it, so this downloads one paper at a time, on your request.
+Paper Fetch does not get around paywalls. It only reaches what your own subscriptions or open access already give you. Publisher licences forbid systematic bulk downloading, and libraries can lose access over it, so this downloads one paper at a time, on your request.
 
 ## Development
 
@@ -83,6 +83,7 @@ node tests/unit.mjs extension      # matching, naming, proxy-link handling
 node tests/e2e.mjs                 # drives the real extension in headless Chrome
 node tests/e2e.mjs --shots docs/screenshots
 scripts/package.sh                 # dist/paper-fetch-<version>.zip
+node scripts/icons.mjs              # re-render the PNG icons from icons/icon.svg
 ```
 
 The end-to-end test needs Chrome, `openssl` and a network connection. It uses its own throwaway browser profile.

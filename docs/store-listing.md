@@ -5,7 +5,7 @@ or 640×400; the ones in `docs/screenshots` are popup-sized and need a backdrop.
 
 ## Name
 
-paper-fetch
+Paper Fetch
 
 ## Summary (132 characters max)
 
@@ -13,7 +13,7 @@ Paste a paper's title or DOI and save the PDF through your campus network, libra
 
 ## Description
 
-Paste a paper's title or DOI. paper-fetch looks it up on Crossref, shows the matches, and saves the PDF using the access you already have.
+Paste a paper's title or DOI. Paper Fetch looks it up on Crossref, shows the matches, and saves the PDF using the access you already have.
 
 It tries four routes in order and stops at the first that returns a PDF:
 • the publisher's site, if you are on campus or on the university VPN
@@ -25,7 +25,7 @@ Files are named by first author, year and first title word, for example tukamuha
 
 When no route works, the popup says what each one ran into and gives you a link to open the article through your library.
 
-paper-fetch does not get around paywalls. It only reaches what your own library subscriptions or open access already give you. It has no server and no analytics, and it never sees your password.
+Paper Fetch does not get around paywalls. It only reaches what your own library subscriptions or open access already give you. It has no server and no analytics, and it never sees your password.
 
 Setup: on campus it needs none. Off campus, paste your library's proxy sign-in link into the settings page.
 

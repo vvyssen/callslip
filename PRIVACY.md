@@ -1,6 +1,6 @@
 # Privacy
 
-paper-fetch has no server of its own, no account, no analytics and no advertising. Nothing is sent to its authors.
+Paper Fetch has no server of its own, no account, no analytics and no advertising. Nothing is sent to its authors.
 
 ## What leaves your browser, and where it goes
 
@@ -10,7 +10,7 @@ paper-fetch has no server of its own, no account, no analytics and no advertisin
 | You download | The DOI of the paper | OpenAlex (`api.openalex.org`), to look for an open-access copy |
 | You download | An ordinary download request for the PDF | The publisher, your library's proxy, or EBSCO |
 
-The download requests are the same ones your browser would make if you clicked the link yourself, and they carry the sessions you are already signed in to. paper-fetch does not read, copy or store your cookies or passwords.
+The download requests are the same ones your browser would make if you clicked the link yourself, and they carry the sessions you are already signed in to. Paper Fetch does not read, copy or store your cookies or passwords.
 
 ## What is stored, and where
 
