@@ -6,23 +6,23 @@ import {
   publisherOf,
   publisherPdfUrl,
   downloadPath,
-  titleSimilarity,
   openAccess,
   proxied,
+  ebscoByDoi,
+  ebscoByIssue,
   sleep,
 } from "./lib.js";
 
 const DEFAULTS = {
-  ebscoCustomer: "",
   proxy: "", // the library's proxy sign-in link, e.g. https://login.ezproxy.uni.edu/login?url=
+  useEbsco: true, // off for a library without EBSCO databases
+  ebscoSeen: false, // set once EBSCO has let this browser through to an article
   autoThreshold: 0.9,
   autoMargin: 0.05,
   autoDefault: false,
   subfolder: "",
 };
 
-const EBSCO_HOME = "https://research.ebsco.com/";
-const EBSCO_LOGIN = /login\.ebsco|logon\.ebsco/i;
 const JOB_KEY = "job";
 const SEARCH_KEY = "lastSearch";
 
@@ -93,13 +93,15 @@ function stopper() {
 
 async function getSettings() {
   const { settings: stored = {} } = await chrome.storage.local.get("settings");
-  const { ezproxy, ...rest } = stored; // 0.2 kept the proxy link under this name
+  // 0.2 kept the proxy link under another name; up to 0.6 EBSCO needed the
+  // library's customer code, which its DOI addresses do without.
+  const { ezproxy, ebscoCustomer, ...rest } = stored;
   return { ...DEFAULTS, ...(ezproxy ? { proxy: ezproxy } : {}), ...rest };
 }
 
 // Writes are read-modify-write, so they run one at a time: two changes landing
-// together (the settings page and the popup, or a detected EBSCO code) would
-// otherwise each start from the old value and one would be lost.
+// together (the settings page and the popup) would otherwise each start from
+// the old value and one would be lost.
 let settingsWrites = Promise.resolve();
 
 function setSettings(patch) {
@@ -324,43 +326,18 @@ async function viaOpenAccess(candidate, settings, note, race, lookup) {
 }
 
 // ------------------------------------------------------------------- EBSCO
+//
+// EBSCO keeps a public address for every article it holds (see ebscoByDoi in
+// lib.js). Opened in a tab where you are signed in to EBSCO, it forwards to the
+// article: to EBSCO's PDF viewer when your library has the full text, to the
+// record's details when it has not. Nothing on those pages is typed into or
+// clicked. The viewer loads the PDF itself, and the address it loaded it from
+// is then saved the way any other link is.
 
-function ebscoSignIn() {
-  return new StepError("sign-in required", { label: "Open EBSCO", url: EBSCO_HOME });
-}
-
-async function detectEbscoCode() {
-  const tabs = await chrome.tabs.query({ url: "https://research.ebsco.com/*" });
-  for (const tab of tabs) {
-    const match = (tab.url || "").match(/\/c\/([^/]+)\//);
-    if (match) return match[1];
-  }
-  const probe = await chrome.tabs.create({ url: EBSCO_HOME, active: false });
-  try {
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await sleep(500);
-      const tab = await chrome.tabs.get(probe.id);
-      const match = (tab.url || "").match(/\/c\/([^/]+)\//);
-      if (match) return match[1];
-      if (EBSCO_LOGIN.test(tab.url || "")) return null;
-    }
-    return null;
-  } finally {
-    try {
-      await chrome.tabs.remove(probe.id);
-    } catch {}
-  }
-}
-
-async function waitForTabLoad(tabId, timeout = 20000) {
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.status === "complete") return tab;
-    await sleep(400);
-  }
-  throw new StepError("page did not finish loading");
-}
+const EBSCO_DOOR = /^https:\/\/openurl\.ebsco\.com\//;
+const EBSCO_VIEWER = /^https:\/\/research\.ebsco\.com\/c\/[^/]+\/viewer\/pdf\//;
+const EBSCO_APP = /^https:\/\/research\.ebsco\.com\/c\/[^/]+\//;
+const EBSCO_LOGIN = /^https:\/\/(login|logon)\.ebsco\./;
 
 // tabs.update() returns before the navigation starts, while the tab still
 // reports the old page as "complete". Wait for the new load to begin first, or
@@ -369,14 +346,12 @@ async function navigate(tabId, url, timeout = 25000) {
   const before = await chrome.tabs.get(tabId);
   await chrome.tabs.update(tabId, { url });
   const start = Date.now();
-  let started = false;
   while (Date.now() - start < timeout) {
     const tab = await chrome.tabs.get(tabId);
-    if (tab.status === "loading" || tab.url !== before.url) started = true;
-    if (tab.status === "complete" && (started || Date.now() - start > 3000)) return tab;
-    await sleep(200);
+    if (tab.status === "loading" || tab.url !== before.url) return;
+    await sleep(100);
   }
-  throw new StepError("page did not finish loading");
+  throw new StepError("page did not start loading");
 }
 
 async function inTab(tabId, func, args = []) {
@@ -397,207 +372,113 @@ async function waitInTab(tabId, func, args = [], timeout = 15000, interval = 400
   return null;
 }
 
-// --- functions below run inside the EBSCO page ---
+// --- functions below run inside EBSCO's pages; they only read ---
 
-function pageHasSelector(selector) {
-  return Boolean(document.querySelector(selector));
-}
-
-function pageFillSearch(query) {
-  const element = document.querySelector("#search-autocomplete-1-input");
-  if (!element) return false;
-  const setter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype,
-    "value",
-  ).set;
-  setter.call(element, query);
-  element.dispatchEvent(new Event("input", { bubbles: true }));
-  element.dispatchEvent(new Event("change", { bubbles: true }));
-  const button = [...document.querySelectorAll("button")].find(
-    (item) => item.offsetWidth && (item.innerText || "").trim() === "Search",
-  );
-  if (!button) return false;
-  button.click();
-  return true;
-}
-
-function pageResultLinks() {
-  return [...document.querySelectorAll("a")]
-    .filter((anchor) => /\/search\/details\//.test(anchor.href))
-    .map((anchor) => ({ title: (anchor.innerText || "").trim(), href: anchor.href }));
-}
-
-// True once the page says the search came back empty, so an unknown DOI does
-// not have to be waited out.
-function pageNoResults() {
+// On EBSCO's door page: "signin" when the visitor is not signed in to EBSCO,
+// "missing" when EBSCO has no such article, null while the page is still on its
+// way to the article.
+function pageEbscoDoor() {
+  if (location.pathname.startsWith("/not_found")) return "missing";
+  let signedIn = null;
+  try {
+    signedIn = JSON.parse(document.getElementById("__NEXT_DATA__").textContent).props.isAuthenticated;
+  } catch {}
   const text = document.body?.innerText || "";
-  return /\b0 (total )?results\b|\bno results\b|couldn.t find any results|did not match any/i.test(text);
+  if (signedIn === false || /sign in at ebscohost/i.test(text)) return "signin";
+  return /item not found/i.test(text) ? "missing" : null;
 }
 
-function pageHasFullText() {
-  return /PDF Full Text/i.test(document.body?.innerText || "");
-}
-
-// Clicks a visible button by its exact label; `last` picks the one in the
-// dialog when the page behind it has a button with the same label.
-function pageClickButton(label, last) {
-  const buttons = [...document.querySelectorAll("button")].filter(
-    (item) => item.offsetWidth && (item.innerText || "").trim() === label,
-  );
-  if (!buttons.length) return false;
-  buttons[last ? buttons.length - 1 : 0].click();
-  return true;
-}
-
-function pageChoosePdf() {
-  const radio = document.querySelector('input[type="radio"][value="pdf"]');
-  if (!radio) return false;
-  if (!radio.checked) radio.click();
-  return true;
+// In EBSCO's PDF viewer: the address the viewer loaded the PDF from, once it
+// has. The page keeps a list of what it has loaded; that list is made longer
+// first so a busy page cannot push the PDF off its end.
+function pageEbscoPdf() {
+  performance.setResourceTimingBufferSize(1000);
+  const loaded = performance
+    .getEntriesByType("resource")
+    .find((entry) => /^https:\/\/content\.ebscohost\.com\/cds\/retrieve\b/.test(entry.name));
+  return loaded ? loaded.name : null;
 }
 
 // --- end of in-page functions ---
 
-async function ebscoSearch(tabId, query, timeout = 30000) {
-  if (!(await inTab(tabId, pageFillSearch, [query]))) {
-    throw new StepError("search form did not respond");
-  }
+// Follows the tab from EBSCO's door to wherever EBSCO sends it. Any page of
+// EBSCO's app other than the PDF viewer (the record's details, an HTML-only
+// article) means there is no PDF to save; it has to stay put for a moment
+// before that is believed, in case the app is only passing through.
+async function ebscoArrival(tabId, timeout = 40000) {
   const start = Date.now();
+  let resting = { url: "", since: 0 };
   while (Date.now() - start < timeout) {
-    let links = [];
-    try {
-      links = (await inTab(tabId, pageResultLinks)) || [];
-    } catch {}
-    if (links.length) return links;
     const tab = await chrome.tabs.get(tabId);
-    if (EBSCO_LOGIN.test(tab.url || "")) throw ebscoSignIn();
-    let empty = false;
-    try {
-      empty = /\/search\/results/.test(tab.url || "") && (await inTab(tabId, pageNoResults));
-    } catch {}
-    if (empty) return [];
-    await sleep(500);
+    const url = tab.url || "";
+    if (EBSCO_VIEWER.test(url)) return { viewer: true, url };
+    if (tab.status === "complete") {
+      if (EBSCO_APP.test(url)) {
+        if (resting.url !== url) resting = { url, since: Date.now() };
+        else if (Date.now() - resting.since >= 1200) return { url };
+      }
+      if (EBSCO_LOGIN.test(url)) return { signIn: true };
+      if (EBSCO_DOOR.test(url)) {
+        let state = null;
+        try {
+          state = await inTab(tabId, pageEbscoDoor);
+        } catch {}
+        if (state === "missing") return { missing: true };
+        if (state === "signin") return { signIn: true };
+      }
+    }
+    await sleep(300);
   }
-  return [];
-}
-
-// Claims the next download started in this browser and gives it our file name.
-// It has to be armed before the click that starts the download: the download
-// can be created before a listener added afterwards exists. Only the claimed
-// download is renamed, so anything else the user downloads meanwhile is left
-// alone.
-function claimNextDownload(filename, timeout = 60000) {
-  const armedAt = Date.now();
-  let claimed = null;
-  let settle = null;
-  const started = new Promise((resolve, reject) => {
-    settle = { resolve, reject };
-  });
-  started.catch(() => {});
-  const claim = (item) => {
-    if (claimed !== null) return;
-    // Downloads this extension starts itself belong to the other routes.
-    if (item.byExtensionId === chrome.runtime.id) return;
-    const startTime = item.startTime ? Date.parse(item.startTime) : Date.now();
-    if (startTime < armedAt - 1000) return;
-    claimed = item.id;
-    settle.resolve(item.id);
-  };
-  const onCreated = (item) => claim(item);
-  const onFilename = (item, suggest) => {
-    claim(item);
-    if (item.id === claimed) suggest({ filename, conflictAction: "uniquify" });
-  };
-  chrome.downloads.onCreated.addListener(onCreated);
-  chrome.downloads.onDeterminingFilename.addListener(onFilename);
-  const timer = setTimeout(() => settle.reject(new StepError("download did not start")), timeout);
-  return {
-    started,
-    release() {
-      clearTimeout(timer);
-      chrome.downloads.onCreated.removeListener(onCreated);
-      chrome.downloads.onDeterminingFilename.removeListener(onFilename);
-    },
-  };
+  throw new StepError("EBSCO did not open the article");
 }
 
 async function viaEbsco(candidate, settings, note, race) {
   const halt = stopper();
   const { until } = halt;
   let tabId = null;
+  const closeTab = () => {
+    if (tabId === null) return;
+    chrome.tabs.remove(tabId).catch(() => {});
+    tabId = null;
+  };
   race?.onStop("ebsco", () => {
     halt.stop();
-    if (tabId !== null) chrome.tabs.remove(tabId).catch(() => {});
+    closeTab();
   });
-  let claim = null;
+  const door = ebscoByDoi(candidate.doi);
   try {
-    let code = settings.ebscoCustomer;
-    if (!code) {
-      note("finding your library");
-      code = await until(detectEbscoCode());
-      if (!code) throw ebscoSignIn();
-      await setSettings({ ebscoCustomer: code });
-    }
-    const searchUrl = `https://research.ebsco.com/c/${code}/search/advanced`;
-    note("opening search");
+    note("opening EBSCO");
     // Not wrapped in until(): the tab has to be known here to be closed again.
-    const tab = await chrome.tabs.create({ url: searchUrl, active: false });
+    const tab = await chrome.tabs.create({ url: door, active: false });
     tabId = tab.id;
-    const loaded = await until(waitForTabLoad(tab.id));
-    if (EBSCO_LOGIN.test(loaded.url || "")) throw ebscoSignIn();
-    if (!(await until(waitInTab(tab.id, pageHasSelector, ["#search-autocomplete-1-input"])))) {
-      const current = await until(chrome.tabs.get(tab.id));
-      if (!(current.url || "").startsWith("https://research.ebsco.com/c/")) throw ebscoSignIn();
-      throw new StepError("search page did not load");
-    }
-
-    note("searching");
-    let links = candidate.doi ? await until(ebscoSearch(tab.id, candidate.doi, 15000)) : [];
-    if (!links.length && candidate.title) {
-      await until(navigate(tab.id, searchUrl));
-      if (!(await until(waitInTab(tab.id, pageHasSelector, ["#search-autocomplete-1-input"])))) {
-        throw new StepError("search page did not load");
-      }
-      links = await until(ebscoSearch(tab.id, candidate.title));
-    }
-    if (!links.length) throw new StepError("not in EBSCO");
-    const best = links
-      .map((link) => ({ ...link, similarity: titleSimilarity(candidate.title, link.title) }))
-      .sort((a, b) => b.similarity - a.similarity)[0];
-    if (best.similarity < 0.5) throw new StepError("no matching record");
-
-    note("opening record");
-    await until(navigate(tab.id, best.href));
-    if (!(await until(waitInTab(tab.id, pageHasFullText, [], 10000, 500)))) {
-      throw new StepError("no PDF full text for this record");
-    }
-
-    note("downloading");
     if (halt.stopped) throw new Stopped();
-    claim = claimNextDownload(downloadPath(candidate, settings.subfolder));
-    if (!(await until(inTab(tab.id, pageClickButton, ["Download", false])))) {
-      throw new StepError("download button not found");
+    let found = await until(ebscoArrival(tab.id));
+    const byIssue = found.missing ? ebscoByIssue(candidate) : null;
+    if (byIssue) {
+      note("trying volume and page");
+      await until(navigate(tab.id, byIssue));
+      found = await until(ebscoArrival(tab.id));
     }
-    if (!(await until(waitInTab(tab.id, pageChoosePdf, [], 4000, 300)))) {
-      throw new StepError("no PDF option in the download dialog");
+    if (found.signIn) throw new StepError("sign-in required", { label: "Sign in at EBSCO", url: door });
+    // EBSCO knows this browser: the popup can stop pointing at library setup.
+    if (!settings.ebscoSeen) setSettings({ ebscoSeen: true }).catch(() => {});
+    if (found.missing) throw new StepError("not in EBSCO");
+    if (!found.viewer) {
+      throw new StepError("no PDF in your library's EBSCO", { label: "Open record", url: found.url });
     }
-    if (!(await until(inTab(tab.id, pageClickButton, ["Download", true])))) {
-      throw new StepError("download button not found");
-    }
-    const id = await until(claim.started);
-    const item = await finishDownload(id, { race, key: "ebsco", stopped: () => halt.stopped });
-    return { downloadId: id, filename: item.filename };
+
+    note("opening the PDF");
+    const pdf = await until(waitInTab(tab.id, pageEbscoPdf, [], 40000, 300));
+    if (!pdf) throw new StepError("EBSCO did not show the PDF", { label: "Open in EBSCO", url: found.url });
+    closeTab();
+    note("saving");
+    return await saveFrom(pdf, candidate, settings, race, "ebsco");
   } catch (error) {
     // Its tab was closed under it: whatever that broke is not worth reporting.
     if (halt.stopped) throw new Stopped();
     throw error;
   } finally {
-    if (claim) claim.release();
-    if (tabId !== null) {
-      try {
-        await chrome.tabs.remove(tabId);
-      } catch {}
-    }
+    closeTab();
   }
 }
 
@@ -646,7 +527,7 @@ function planSteps(candidate, settings) {
           ? { state: "pending" }
           : skip("not set up")),
     },
-    { key: "ebsco", label: "EBSCO", state: "pending" },
+    { key: "ebsco", label: "EBSCO", ...(settings.useEbsco ? { state: "pending" } : skip("turned off")) },
     { key: "oa", label: "Open access", state: "pending" },
   ].map((step) => ({ detail: "", action: null, ...step }));
 }
@@ -659,10 +540,9 @@ const RUNNERS = {
   oa: viaOpenAccess,
 };
 
-// EBSCO takes a browser tab and a search of its own, so the plain links get
-// this much of a head start: when one of them answers with the PDF straight
-// away, EBSCO is never opened. If they have all failed sooner, it starts sooner.
-// A publisher whose papers libraries only get through EBSCO gets no such wait.
+// EBSCO takes a browser tab of its own, so the plain links get this much of a
+// head start: when one of them answers with the PDF straight away, EBSCO is
+// never opened. If they have all failed sooner, it starts sooner.
 const EBSCO_HEAD_START = 2000;
 
 // Runs the given routes side by side. Returns the one that delivered, if any,
@@ -715,8 +595,7 @@ async function raceRoutes(steps, candidate, settings, publish) {
   if (ebsco) {
     tasks.push(
       (async () => {
-        const wait = publisherOf(candidate.doi)?.ebscoFirst ? 0 : EBSCO_HEAD_START;
-        if (links.length && wait) await Promise.race([Promise.all(links), sleep(wait)]);
+        if (links.length) await Promise.race([Promise.all(links), sleep(EBSCO_HEAD_START)]);
         if (race.winner !== null) {
           standDown(ebsco);
           publish();
@@ -757,6 +636,14 @@ async function runJob(candidate) {
 
   let won = null;
   let waiting = job.steps.filter((step) => step.state === "pending" && step !== free);
+  // A publisher whose papers libraries get only through EBSCO: EBSCO is asked
+  // first and alone. The publisher's own site would only refuse, so nothing is
+  // requested from it unless EBSCO turns out to have no answer.
+  const ebsco = waiting.find((step) => step.key === "ebsco");
+  if (ebsco && publisherOf(candidate.doi)?.ebscoFirst) {
+    won = (await raceRoutes([ebsco], candidate, settings, publish)).won;
+    waiting = waiting.filter((step) => step !== ebsco);
+  }
   while (waiting.length && !won) {
     const round = await raceRoutes(waiting, candidate, settings, publish);
     won = round.won;
@@ -800,8 +687,37 @@ async function runJob(candidate) {
   return job;
 }
 
+// One paper per click is how this is meant to be used, and library licences
+// forbid systematic downloading. So there is a ceiling no reader collecting
+// papers by hand comes near, and no way to queue, schedule or loop downloads.
+const PACE = { papers: 30, minutes: 60 };
+const PACE_KEY = "savedAt"; // when each of the last papers was saved
+
+async function recentSaves() {
+  const { [PACE_KEY]: times = [] } = await chrome.storage.local.get(PACE_KEY);
+  const since = Date.now() - PACE.minutes * 60000;
+  return times.filter((time) => time > since && time <= Date.now()).sort((a, b) => a - b);
+}
+
+// Null when another paper may be fetched now, otherwise why not and until when.
+async function paceLimit() {
+  const recent = await recentSaves();
+  if (recent.length < PACE.papers) return null;
+  const free = new Date(recent[recent.length - PACE.papers] + PACE.minutes * 60000);
+  const at = free.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `${PACE.papers} papers an hour is the limit, to stay within library licences. Next one at ${at}.`;
+}
+
+async function noteSave() {
+  await chrome.storage.local.set({ [PACE_KEY]: [...(await recentSaves()), Date.now()] });
+}
+
 async function startDownload(candidate) {
   if (!candidate?.doi) return { error: "Nothing selected." };
+  if (running) return { error: "A download is already in progress." };
+  const limit = await paceLimit();
+  if (limit) return { error: limit };
+  // Checked again: another request can have come in while that was looked up.
   if (running) return { error: "A download is already in progress." };
   running = true;
   // Chrome shuts an extension's background worker down after 30 seconds without
@@ -815,7 +731,9 @@ async function startDownload(candidate) {
       const record = await crossrefByDoi(candidate.doi).catch(() => null);
       if (record) candidate = { ...candidate, ...record };
     }
-    return { job: await runJob(candidate) };
+    const job = await runJob(candidate);
+    if (job.status === "done") await noteSave();
+    return { job };
   } finally {
     clearInterval(awake);
     running = false;
@@ -852,7 +770,6 @@ const HANDLERS = {
   download: (message) => startDownload(message.candidate),
   "settings:get": async () => ({ settings: await getSettings() }),
   "settings:set": async (message) => ({ settings: await setSettings(message.settings || {}) }),
-  "settings:detect": async () => ({ code: await detectEbscoCode() }),
 };
 
 // First install: land on the settings page, where library access is set up.

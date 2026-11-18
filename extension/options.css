@@ -205,6 +205,15 @@
   color: var(--text);
 }
 
+/* A switch that follows other settings in the same card, and what belongs to it. */
+.setting + .setting-switch {
+  margin-top: 22px;
+}
+
+.setting.after-switch {
+  margin-top: 8px;
+}
+
 .pair {
   display: grid;
   grid-template-columns: 1fr 1fr;

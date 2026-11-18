@@ -20,7 +20,8 @@ When you click the Paper Fetch button, it reads the page that tab is showing: it
 
 ## What is stored, and where
 
-- Your settings (proxy link, EBSCO customer code, download folder, auto-download preferences) are kept in the browser's extension storage on your computer.
+- Your settings (proxy link, whether to use EBSCO, download folder, auto-download preferences) are kept in the browser's extension storage on your computer.
+- The times at which papers were saved in the last hour are kept there too. They are what the limit of 30 papers an hour is counted from. No titles or DOIs are kept with them.
 - The last search and the last download's progress are kept until you close the browser, so the popup can show them when reopened.
 
 Nothing else is stored. Removing the extension removes all of it.
@@ -31,4 +32,4 @@ Nothing else is stored. Removing the extension removes all of it.
 - `activeTab`: read the page you click the button on, as described above. It gives no access to your other tabs or your browsing history.
 - `downloads`: save the PDF and check that what arrived is a PDF.
 - `storage`: keep the settings above.
-- `scripting` on `ebsco.com`: fill in the search box and press the download button on the EBSCO page, in a background tab the extension opens and closes itself.
+- `scripting` on `ebsco.com`: in the background tab the extension opens on the paper's EBSCO page, read whether you are signed in, whether EBSCO has the article, and which address EBSCO's viewer loaded the PDF from. Nothing on the page is filled in or clicked, and the tab is closed afterwards.

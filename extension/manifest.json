@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Paper Fetch",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "One-click PDFs for INFORMS journals. Other papers through the publisher, your library proxy, EBSCO, or open access.",
   "minimum_chrome_version": "116",
   "icons": {

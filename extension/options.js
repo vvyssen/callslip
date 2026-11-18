@@ -13,7 +13,6 @@ function send(message) {
 }
 
 const SAMPLE = { authors: ["Alex Smith"], year: 2018, title: "Supply chain resilience" };
-const EBSCO_HINT = $("ebscoNote").innerHTML;
 
 let savedTimer = null;
 
@@ -23,13 +22,6 @@ function flash(text, isError = false) {
   note.className = "saved-note show" + (isError ? " error" : "");
   clearTimeout(savedTimer);
   savedTimer = setTimeout(() => note.classList.remove("show"), isError ? 6000 : 1600);
-}
-
-function ebscoNote(text, kind) {
-  const note = $("ebscoNote");
-  if (text) note.textContent = text;
-  else note.innerHTML = EBSCO_HINT;
-  note.className = "hint" + (kind ? ` ${kind}` : "");
 }
 
 function showPreview() {
@@ -48,17 +40,16 @@ function percent(id, fallback) {
 }
 
 // Each control reads and writes one setting. Saving is per control, never the
-// whole page: the popup and a download in progress change settings too (the
-// auto-download switch, a detected EBSCO code), and a page that has been open
-// for a while must not write its stale copy over those.
+// whole page: the popup changes settings too (the auto-download switch), and a
+// page that has been open for a while must not write its stale copy over those.
 const CONTROLS = {
   proxy: {
     show: (settings) => ($("proxy").value = settings.proxy || ""),
     read: () => ({ proxy: ($("proxy").value = normalizeProxy($("proxy").value)) }),
   },
-  customer: {
-    show: (settings) => ($("customer").value = settings.ebscoCustomer || ""),
-    read: () => ({ ebscoCustomer: $("customer").value.trim() }),
+  useEbsco: {
+    show: (settings) => ($("useEbsco").checked = settings.useEbsco !== false),
+    read: () => ({ useEbsco: $("useEbsco").checked }),
   },
   subfolder: {
     show: (settings) => ($("subfolder").value = settings.subfolder || ""),
@@ -90,26 +81,6 @@ async function save(id) {
   if (response?.error) throw new Error(response.error);
   showPreview();
   flash("Saved");
-}
-
-async function detect() {
-  const button = $("detect");
-  button.disabled = true;
-  ebscoNote("Looking for your EBSCO session…");
-  try {
-    const response = await send({ type: "settings:detect" });
-    if (response?.code) {
-      $("customer").value = response.code;
-      ebscoNote(`Found your library: ${response.code}`, "ok");
-      await save("customer");
-    } else {
-      ebscoNote("Not signed in to EBSCO yet. Open EBSCO, sign in, then Detect again.", "error");
-    }
-  } catch (error) {
-    ebscoNote(error.message, "error");
-  } finally {
-    button.disabled = false;
-  }
 }
 
 // ---- find the proxy link by university name ----
@@ -253,8 +224,6 @@ for (const id of Object.keys(CONTROLS)) {
   });
 }
 $("subfolder").addEventListener("input", showPreview);
-$("customer").addEventListener("input", () => ebscoNote());
-$("detect").addEventListener("click", detect);
 $("openEbsco").addEventListener("click", () => {
   chrome.tabs.create({ url: "https://research.ebsco.com/" });
 });

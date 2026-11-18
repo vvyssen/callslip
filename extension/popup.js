@@ -46,7 +46,7 @@ const TYPE_LABELS = {
 const GUIDE = "On an article page the paper is picked up for you. Anywhere else, paste a title or DOI.";
 
 const state = {
-  settings: { autoThreshold: 0.9, autoMargin: 0.05, autoDefault: false, proxy: "", ebscoCustomer: "" },
+  settings: { autoThreshold: 0.9, autoMargin: 0.05, autoDefault: false, proxy: "", ebscoSeen: false },
   page: null, // what the tab the popup was opened on has to offer
   candidates: [],
   heading: "", // overrides the "N matches" line above the list
@@ -225,7 +225,7 @@ function setNotice(text, kind = "") {
   $("notice").textContent = text;
   $("notice").className = "notice" + (kind ? ` ${kind}` : "");
   // Until a library is set up, the opening guidance also points at settings.
-  if (text === GUIDE && !state.settings.proxy && !state.settings.ebscoCustomer) {
+  if (text === GUIDE && !state.settings.proxy && !state.settings.ebscoSeen) {
     const setup = el("button", "link", "Set up library access");
     setup.type = "button";
     setup.addEventListener("click", () => chrome.runtime.openOptionsPage());

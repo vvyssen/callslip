@@ -49,7 +49,7 @@ const manifest = JSON.parse(readFileSync(join(extension, "manifest.json"), "utf8
 manifest.host_permissions.push(...PAGE_PERMISSIONS);
 writeFileSync(join(extension, "manifest.json"), JSON.stringify(manifest));
 
-const fake = await startFakeSites({ dir: work, port: 8443, ebscoTitle: IN_EBSCO.title });
+const fake = await startFakeSites({ dir: work, port: 8443, ebscoDoi: IN_EBSCO.doi });
 const browser = await launch({ profile: join(work, "profile"), downloads, extraArgs: fake.chromeArgs });
 const errors = [];
 browser.onEvent((message) => {
@@ -171,13 +171,13 @@ try {
   console.log("      ", routes(result));
   check("a paywall page is not accepted as the paper", stepOf(result, "publisher").state === "failed" && stepOf(result, "publisher").detail === "got a web page, not a PDF", stepOf(result, "publisher").detail);
   check("proxy is skipped until it is set up", stepOf(result, "proxy").state === "skipped");
-  check("EBSCO record with another title is not taken", stepOf(result, "ebsco").detail === "no matching record", stepOf(result, "ebsco").detail);
+  check("a paper EBSCO does not hold is reported as such", stepOf(result, "ebsco").state === "failed" && stepOf(result, "ebsco").detail === "not in EBSCO", stepOf(result, "ebsco").detail);
   check("nothing but PDFs left in Downloads", saved().every(isPdf), JSON.stringify(saved()));
   if (result.status === "failed") {
     check("failure offers the article page", result.fallback?.url === `https://doi.org/${PAYWALLED.doi}`, JSON.stringify(result.fallback));
   }
-  check("EBSCO customer code found and remembered", (await message(popup, { type: "settings:get" })).settings.ebscoCustomer === "test1");
-  check("open settings page picks up the detected code", (await evaluate(options, "document.getElementById('customer').value")) === "test1");
+  check("EBSCO needs no setup: being let through once is remembered", (await message(popup, { type: "settings:get" })).settings.ebscoSeen === true);
+  check("and it is switched on in settings", await evaluate(options, "document.getElementById('useEbsco').checked"));
 
   // ------------------------------------------------ three ways to set the proxy
   // 1. Opening the popup on the library's own sign-in page.
@@ -187,7 +187,7 @@ try {
   await sleep(500);
   let settings = (await message(options, { type: "settings:get" })).settings;
   check("sign-in page is offered as the proxy and saved in one click", settings.proxy === PROXY_LINK, settings.proxy);
-  check("saving one setting leaves the others alone", settings.ebscoCustomer === "test1", settings.ebscoCustomer);
+  check("saving one setting leaves the others alone", settings.ebscoSeen === true && settings.useEbsco === true, JSON.stringify(settings));
 
   // 2. Looking the university up by name.
   await message(options, { type: "settings:set", settings: { proxy: "" } });
@@ -290,7 +290,7 @@ try {
   fake.behave["www-tandfonline-com.ezproxy.test-uni.edu"] = { delay: 2800, pdf: true };
   fake.hits.length = 0;
   result = await download(popup, () => click(popup, "download"));
-  check("EBSCO starts when the plain links are slow", fake.hits.some((hit) => hit.startsWith("research.ebsco.com/c/test1/search/advanced")), routes(result));
+  check("EBSCO starts when the plain links are slow", fake.hits.some((hit) => hit.startsWith("openurl.ebsco.com/contentitem/doi:")), routes(result));
   check("and is called off when another route gets the paper first", result.status === "done" && result.provider === "Library proxy" && stepOf(result, "ebsco").state === "skipped", routes(result));
   await sleep(500);
   check("its tab is closed", !(await browser.targets()).some((target) => target.type === "page" && target.url.includes("ebsco")));
@@ -306,8 +306,17 @@ try {
   delete fake.behave["www-tandfonline-com.ezproxy.test-uni.edu"];
   check("nothing but PDFs left in Downloads", saved().every(isPdf), JSON.stringify(saved()));
 
+  // A library without EBSCO switches it off, and it is then left alone.
+  await evaluate(options, "(document.getElementById('useEbsco').click(), true)");
+  await sleep(400);
+  fake.hits.length = 0;
+  result = await download(popup, () => click(popup, "download"));
+  check("EBSCO switched off in settings is not opened", stepOf(result, "ebsco").state === "skipped" && stepOf(result, "ebsco").detail === "turned off" && !fake.hits.some((hit) => hit.includes("ebsco")), routes(result));
+  await evaluate(options, "(document.getElementById('useEbsco').click(), true)");
+  await sleep(400);
+
   // ------------------------------------------------ opened on an article page
-  // INFORMS, off campus: the paper is recognised, the publisher refuses, the proxy delivers.
+  // INFORMS: the paper is recognised and comes from EBSCO, where libraries have it.
   await message(popup, { type: "settings:set", settings: { autoDefault: true } });
   let onPage = await popupOn(`https://pubsonline.informs.org/doi/${INFORMS[0].doi}`);
   await listed(onPage);
@@ -322,14 +331,12 @@ try {
   check("reopening on the same page shows it again without a new lookup", (await text(onPage, "count")) === "On this page");
   await browser.send("Emulation.setDeviceMetricsOverride", { width: 420, height: 600, deviceScaleFactor: 2, mobile: false }, onPage);
   await snap(onPage, "popup-on-page.png");
-  // The proxy takes a moment here, which shows when EBSCO was started.
-  fake.behave["pubsonline-informs-org.ezproxy.test-uni.edu"] = { delay: 1200, pdf: true };
   fake.hits.length = 0;
   result = await download(onPage, () => key(onPage, "Enter"));
-  delete fake.behave["pubsonline-informs-org.ezproxy.test-uni.edu"];
-  check("for an INFORMS paper EBSCO starts at once, without the head start", fake.hits.some((hit) => hit.startsWith("research.ebsco.com/c/test1/search/advanced")), routes(result));
   check("one Enter downloads it", result.status === "done" && result.filename === INFORMS[0].file && isPdf(INFORMS[0].file), `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
-  check("through the proxy, since the publisher's own link is paywalled", result.provider === "Library proxy" && stepOf(result, "publisher").state !== "done", routes(result));
+  check("an INFORMS paper comes from EBSCO", result.provider === "EBSCO", routes(result));
+  const askedInforms = fake.hits.filter((hit) => /informs/.test(hit) && hit.includes("/doi/pdf/"));
+  check("and nothing is requested from INFORMS's own site for it", askedInforms.length === 0 && stepOf(result, "publisher").state === "skipped" && stepOf(result, "proxy").state === "skipped", `${JSON.stringify(askedInforms)} ${routes(result)}`);
   check("the page's link is not asked for twice when it is the publisher's", !stepOf(result, "page"), routes(result));
 
   // The same site read through the library proxy: the page's own PDF link works.
@@ -337,8 +344,10 @@ try {
   await listed(onPage);
   check("a proxied INFORMS page is recognised", (await text(onPage, "count")) === "On this page");
   result = await download(onPage, () => key(onPage, "Enter"));
+  // EBSCO has this one without full text, so the other routes get their turn.
+  check("an EBSCO record without a PDF is turned down, with a way to open it", stepOf(result, "ebsco").state === "failed" && stepOf(result, "ebsco").detail === "no PDF in your library's EBSCO" && stepOf(result, "ebsco").action?.label === "Open record", JSON.stringify(stepOf(result, "ebsco")));
   // The proxy route leads to the same file and may get there first.
-  check("and downloaded, with that page's own PDF link among the routes", result.status === "done" && ["This page", "Library proxy"].includes(result.provider) && stepOf(result, "page")?.state !== "failed" && result.filename === INFORMS[1].file, `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
+  check("and it is downloaded, with that page's own PDF link among the routes", result.status === "done" && ["This page", "Library proxy"].includes(result.provider) && stepOf(result, "page")?.state !== "failed" && result.filename === INFORMS[1].file, `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
 
   // An issue page: every article it links to is listed.
   onPage = await popupOn("https://pubsonline.informs.org/toc/mnsc/66/1");
@@ -352,8 +361,10 @@ try {
   await snap(onPage, "popup-page-list.png");
   await key(onPage, "ArrowDown");
   await key(onPage, "ArrowDown");
+  fake.hits.length = 0;
   result = await download(onPage, () => key(onPage, "Enter"));
   check("a paper picked from the list gets its author and year looked up", result.status === "done" && result.filename === INFORMS[2].file, `${result.status} ${result.filename || ""} ${routes(result)}`);
+  check("a record EBSCO holds without its DOI is found by volume and page (live Crossref)", result.provider === "EBSCO" && fake.hits.some((hit) => hit.startsWith("openurl.ebsco.com/openurl?")), `${result.provider || ""} ${JSON.stringify(fake.hits.filter((hit) => hit.includes("openurl")))}`);
 
   // A slow connection: the page has its title and tags but will not finish
   // loading for a long time. The popup must not wait for it.
@@ -382,13 +393,34 @@ try {
   result = await download(popup, () => key(popup, "Enter"));
   check("downloads through EBSCO", result.status === "done" && result.provider === "EBSCO", `${result.status} ${result.provider || ""} ${routes(result)}`);
   check("EBSCO file renamed to the cite key", result.filename === IN_EBSCO.file && isPdf(IN_EBSCO.file), result.filename);
-  check("falls back from DOI to title search", fake.hits.filter((hit) => hit.endsWith("/c/test1/search/advanced")).length === 2);
-  check("opens the record whose title matches", fake.hits.some((hit) => hit.includes("/details/right1")) && !fake.hits.some((hit) => hit.includes("/details/wrong1")));
-  check("picks PDF in the download dialog", fake.hits.some((hit) => hit.endsWith("?fmt=pdf")) && !fake.hits.some((hit) => hit.endsWith("?fmt=epub")));
+  check("goes to the paper's own EBSCO address by DOI", fake.hits[0] === `openurl.ebsco.com/contentitem/doi:${encodeURIComponent(IN_EBSCO.doi)}`, fake.hits[0]);
+  check("saves the PDF that EBSCO's viewer loaded", fake.hits.filter((hit) => hit === "content.ebscohost.com/cds/retrieve?content=right1").length >= 1, JSON.stringify(fake.hits));
+  check("nothing on EBSCO's pages is clicked or typed into", !fake.hits.some((hit) => hit.includes("/touched")), JSON.stringify(fake.hits.filter((hit) => hit.includes("/touched"))));
   check("closes its EBSCO tab", !(await browser.targets()).some((target) => target.type === "page" && target.url.includes("ebsco")));
 
   result = await download(popup, () => key(popup, "Enter"));
   check("a second copy does not overwrite the first", result.status === "done" && result.filename !== IN_EBSCO.file && saved().includes(IN_EBSCO.file), result.filename);
+
+  // Not signed in to EBSCO: said so, with the paper's EBSCO page one click away.
+  fake.behave.ebsco = { signedOut: true };
+  result = await download(popup, () => key(popup, "Enter"));
+  delete fake.behave.ebsco;
+  const signedOut = stepOf(result, "ebsco");
+  check("signed out of EBSCO is recognised", signedOut.state === "failed" && signedOut.detail === "sign-in required", JSON.stringify(signedOut));
+  check("with the paper's EBSCO page to sign in on", signedOut.action?.label === "Sign in at EBSCO" && signedOut.action?.url === `https://openurl.ebsco.com/contentitem/doi:${encodeURIComponent(IN_EBSCO.doi)}`, JSON.stringify(signedOut.action));
+  check("its tab is closed then too", !(await browser.targets()).some((target) => target.type === "page" && target.url.includes("ebsco")));
+
+  // ------------------------------------------------ the hourly ceiling
+  const savedSoFar = await evaluate(popup, "chrome.storage.local.get('savedAt').then((data) => (data.savedAt || []).length)");
+  check("every saved paper is counted", savedSoFar >= 8, String(savedSoFar));
+  await evaluate(popup, "chrome.storage.local.set({ savedAt: Array.from({ length: 30 }, (_, i) => Date.now() - 60000 - i * 1000) }).then(() => true)");
+  await evaluate(popup, "chrome.storage.session.remove('job')");
+  await key(popup, "Enter");
+  await waitFor(popup, "/limit/.test(document.getElementById('hint').textContent)", 8000).catch(() => {});
+  check("after 30 papers in an hour the next one is refused, with the time it frees up", /^30 papers an hour is the limit.*Next one at \d/.test(await text(popup, "hint")) && (await job(popup)) === null, await text(popup, "hint"));
+  await evaluate(popup, `chrome.storage.local.set({ savedAt: Array.from({ length: 30 }, () => Date.now() - 61 * 60000) }).then(() => true)`);
+  result = await download(popup, () => key(popup, "Enter"));
+  check("and an hour later it is possible again", result.status === "done", `${result.status} ${routes(result)}`);
 
   // A short title: Crossref's whole-reference search buries the paper itself
   // under longer titles and puts a working-paper version first.

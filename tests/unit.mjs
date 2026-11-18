@@ -14,6 +14,16 @@ const near = (name, got, lo, hi) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}  (${got.toFixed(3)}, expected ${lo}..${hi})`);
 };
 
+// EBSCO's address for an article
+eq("EBSCO: by DOI", lib.ebscoByDoi("10.1287/mnsc.1100.1251"), "https://openurl.ebsco.com/contentitem/doi:10.1287%2Fmnsc.1100.1251");
+eq(
+  "EBSCO: by journal, volume and page",
+  lib.ebscoByIssue({ issn: "0025-1909", volume: "56", issue: "12", firstPage: "2282", year: 2010, title: "Bargaining Chains" }),
+  "https://openurl.ebsco.com/openurl?genre=article&issn=0025-1909&volume=56&issue=12&spage=2282&date=2010&atitle=Bargaining+Chains",
+);
+eq("EBSCO: no volume or page, no second address", lib.ebscoByIssue({ issn: "0025-1909", volume: "", firstPage: "", title: "x" }), null);
+eq("EBSCO: nothing known, no second address", lib.ebscoByIssue({ title: "x" }), null);
+
 // proxy link clean-up
 const P = "https://login.ezproxy.uni.edu/login?url=";
 eq("proxy: already a prefix", lib.normalizeProxy(P), P);

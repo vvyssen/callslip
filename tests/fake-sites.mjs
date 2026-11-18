@@ -8,12 +8,16 @@
 //   <site>.ezproxy.test-uni.edu     the publishers above, read through that proxy
 //   login.ezproxy.other-uni.edu     a second proxy that never shows a menu page
 //   journal.example-press.org       a publisher we have no address pattern for
-//   research.ebsco.com              the EBSCO search app
+//   openurl.ebsco.com               EBSCO's public door: one address per article
+//   research.ebsco.com              EBSCO's PDF viewer and record pages
+//   content.ebscohost.com           where that viewer loads the PDF from
 //   libproxy-db.org                 the public directory of library proxies
 //
 // The stand-ins carry the same handles the extension looks for on the real
-// sites: Dublin Core / citation_* meta tags, /doi/ links, EBSCO's search box
-// id, its "Search"/"Download" buttons and the format radios in its dialog.
+// sites: Dublin Core / citation_* meta tags, /doi/ links, and for EBSCO the
+// addresses its door forwards to and the sign-in flag in the door page's data.
+// EBSCO's pages also report any click or keystroke they receive, so a test can
+// show that the extension only reads them.
 import https from "node:https";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -35,7 +39,9 @@ const HOSTS = [
   "login.ezproxy.other-uni.edu",
   "pubsonline-informs-org.ezproxy.other-uni.edu",
   "journal.example-press.org",
+  "openurl.ebsco.com",
   "research.ebsco.com",
+  "content.ebscohost.com",
   "libproxy-db.org",
 ];
 // A real click on the toolbar button lets the extension read the tab it was
@@ -101,7 +107,18 @@ function informsIssue({ stalled = false } = {}) {
 // the page stays "loading" long after it has shown its title.
 const STALLED_SCRIPT = '<script src="/stalled.js"></script>';
 
-export async function startFakeSites({ dir, port, ebscoTitle }) {
+// Reports clicks, keystrokes and form input on an EBSCO stand-in page.
+const WATCH = `for (const type of ['click', 'keydown', 'input', 'change', 'submit']) {
+  document.addEventListener(type, () => fetch('/touched?by=' + type), true);
+}`;
+const MANAGEMENT_SCIENCE = ["0025-1909", "1526-5501"];
+
+// What the EBSCO stand-in holds:
+//   ebscoDoi     an article with PDF full text, known by its DOI
+//   INFORMS[0]   the same
+//   INFORMS[1]   a record without full text
+//   INFORMS[2]   full text, but the record has no DOI: journal, volume and page find it
+export async function startFakeSites({ dir, port, ebscoDoi }) {
   execFileSync("openssl", [
     "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=paper-fetch-test",
     "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem"),
@@ -111,7 +128,10 @@ export async function startFakeSites({ dir, port, ebscoTitle }) {
   //   delay  wait this long before answering
   //   pdf    serve the PDF where a paywall page would be
   //   cut    start sending a PDF, then drop the connection
+  // behave.ebsco = { signedOut: true } makes EBSCO treat the visitor as a stranger.
   const behave = {};
+  const withPdf = { [ebscoDoi]: "right1", [INFORMS[0].doi]: "informs0" };
+  const withoutPdf = { [INFORMS[1].doi]: "nopdf1" };
 
   const server = https.createServer(
     { key: readFileSync(join(dir, "key.pem")), cert: readFileSync(join(dir, "cert.pem")) },
@@ -216,57 +236,59 @@ export async function startFakeSites({ dir, port, ebscoTitle }) {
         ]), "application/json", { "Access-Control-Allow-Origin": "*" });
       }
 
+      if (path === "/touched") return send("", "text/plain");
+
+      if (host === "openurl.ebsco.com") {
+        const signedOut = Boolean(behave.ebsco?.signedOut);
+        // Like the real page: the sign-in state is in the page's data, and the
+        // page moves on by itself a moment after it has loaded.
+        const door = (title, body, then = "") => send(page(title, `
+          <script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { isAuthenticated: !signedOut } })}</script>
+          <p>Connecting you to content on EBSCOhost</p>${body}
+          <script>${WATCH}${then}</script>`));
+        let target = null;
+        if (path.startsWith("/contentitem/doi:")) {
+          const doi = path.slice("/contentitem/doi:".length);
+          if (withPdf[doi]) target = `/viewer/pdf/${withPdf[doi]}?route=details`;
+          else if (withoutPdf[doi]) target = `/search/details/${withoutPdf[doi]}?db=test`;
+        } else if (path === "/openurl") {
+          const known = MANAGEMENT_SCIENCE.includes(url.searchParams.get("issn")) && url.searchParams.get("volume") && url.searchParams.get("spage");
+          if (known) target = "/viewer/pdf/byissue1?route=details";
+        }
+        if (signedOut) {
+          return door("EBSCOhost", "<h1>Access on EBSCOhost through your institution</h1><button>Sign in at EBSCOhost</button>");
+        }
+        if (!target) {
+          return door("Detail - OpenURL Connection - EBSCO", '<p id="state"></p>', `
+            setTimeout(() => {
+              history.replaceState({}, '', '/not_found/detailv2');
+              document.getElementById('state').textContent = 'Item not found';
+            }, 700);`);
+        }
+        return door("Results - OpenURL Connection - EBSCO", "", `
+          setTimeout(() => { location.href = 'https://research.ebsco.com/c/test1${target}'; }, 700);`);
+      }
+
       if (host === "research.ebsco.com") {
         if (path === "/") return redirect("/c/test1/search");
-        if (path === "/c/test1/search" || path === "/c/test1/search/advanced") {
-          // Results render in place, like the real single-page app. A DOI finds
-          // nothing, so the extension has to fall back to the title.
+        if (path === "/c/test1/search") return send(page("EBSCO", "<h1>EBSCOhost</h1>"));
+        const viewer = path.match(/^\/c\/test1\/viewer\/pdf\/([^/]+)$/);
+        if (viewer) {
+          // The viewer fetches the PDF itself, a moment after the page is up.
           return send(page("EBSCO", `
-            <textarea id="search-autocomplete-1-input"></textarea>
-            <button id="go">Search</button>
-            <div id="out"></div>
-            <script>
-              document.getElementById('go').addEventListener('click', () => {
-                const q = document.getElementById('search-autocomplete-1-input').value;
-                history.pushState({}, '', '/c/test1/search/results?q=' + encodeURIComponent(q));
-                const out = document.getElementById('out');
-                if (/^10\\./.test(q)) { out.textContent = '0 total results'; return; }
-                setTimeout(() => {
-                  out.innerHTML = '<a href="/c/test1/search/details/wrong1">An unrelated paper about something else</a><br>'
-                    + '<span>PDF Full Text</span> <a href="/c/test1/search/details/right1">${ebscoTitle}</a>';
-                }, 600);
-              });
+            <h1>PDF viewer</h1><button>Download</button>
+            <script>${WATCH}
+              setTimeout(() => fetch('https://content.ebscohost.com/cds/retrieve?content=${viewer[1]}').then((answer) => answer.blob()), 500);
             </script>`));
         }
         if (path.startsWith("/c/test1/search/details/")) {
-          const id = path.split("/").pop();
-          // The full-text marker appears late, and the dialog opens with a
-          // format other than PDF selected.
-          return send(page("EBSCO record", `
-            <h1>${id === "right1" ? ebscoTitle : "An unrelated paper"}</h1>
-            <div id="ft"></div>
-            <button id="open">Download</button>
-            <div id="modal" hidden>
-              <label><input type="radio" name="fmt" value="epub" checked> EPUB</label>
-              <label><input type="radio" name="fmt" value="pdf"> PDF</label>
-              <button id="confirm">Download</button>
-            </div>
-            <script>
-              setTimeout(() => { document.getElementById('ft').textContent = 'PDF Full Text'; }, 500);
-              document.getElementById('open').addEventListener('click', () => { document.getElementById('modal').hidden = false; });
-              document.getElementById('confirm').addEventListener('click', () => {
-                const a = document.createElement('a');
-                a.href = '/file/${id}?fmt=' + document.querySelector('input[name=fmt]:checked').value;
-                a.download = '';
-                document.body.append(a);
-                a.click();
-              });
-            </script>`));
+          return send(page("Record details", `<h1>A record without full text</h1><button>Access options</button><script>${WATCH}</script>`));
         }
-        if (path.startsWith("/file/")) {
-          if (url.searchParams.get("fmt") === "pdf") return pdf("EBSCO-FullText.pdf");
-          return send(Buffer.alloc(30000, 1), "application/epub+zip", { "Content-Disposition": 'attachment; filename="wrong.epub"' });
-        }
+      }
+
+      if (host === "content.ebscohost.com" && path === "/cds/retrieve") {
+        // As EBSCO sends it: no file name, readable from any page.
+        return send(PDF, "application/pdf", { "Content-Length": PDF.length, "Access-Control-Allow-Origin": "*" });
       }
 
       res.writeHead(404);

@@ -48,17 +48,20 @@
         <p class="hint credit">University list from libproxy-db.org, fetched when you search.</p>
       </div>
 
-      <div class="setting">
-        <label for="customer">EBSCO customer code</label>
+      <label class="switch setting-switch">
+        <span class="switch-text">Get papers from EBSCO when my library has them there</span>
+        <input id="useEbsco" type="checkbox">
+        <span class="track"></span>
+      </label>
+      <div class="setting after-switch">
         <div class="control">
-          <input id="customer" class="input" spellcheck="false" placeholder="Found automatically on first use">
-          <button id="detect" class="btn" type="button">Detect</button>
           <button id="openEbsco" class="btn" type="button">Open EBSCO</button>
         </div>
-        <p id="ebscoNote" class="hint">
-          Only if your library subscribes to EBSCO. It is the part after <code>/c/</code> in
-          <code>research.ebsco.com/c/…/</code> once you are signed in; leave it blank and it
-          is looked up the first time EBSCO is needed.
+        <p class="hint">
+          Nothing to fill in. Sign in to EBSCO through your library once (Open EBSCO); after
+          that Paper Fetch opens the paper's own EBSCO page by its DOI and saves the PDF your
+          library provides there. INFORMS journals reach libraries this way only. Switch it
+          off if your library has no EBSCO databases.
         </p>
       </div>
     </section>

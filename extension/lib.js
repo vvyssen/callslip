@@ -122,6 +122,11 @@ function toCandidate(item) {
     year: candidateYear(item),
     journal: plainText((item["container-title"] || [""])[0]),
     type: item.type || "",
+    // Where it was printed: a second way to name the article to a library.
+    issn: (item.ISSN || [])[0] || "",
+    volume: item.volume || "",
+    issue: item.issue || "",
+    firstPage: (item.page || "").split("-")[0].trim(),
   };
 }
 
@@ -157,7 +162,7 @@ async function crossrefWorks(params, rows) {
   url.searchParams.set("rows", String(rows));
   url.searchParams.set(
     "select",
-    "DOI,title,author,issued,published-print,published-online,container-title,type",
+    "DOI,title,author,issued,published-print,published-online,container-title,type,ISSN,volume,issue,page",
   );
   const payload = await crossrefGet(url);
   return (payload?.message?.items || [])
@@ -227,7 +232,8 @@ const PUBLISHERS = [
     pdf: atypon("pubsonline.informs.org"),
     // Since 1 January 2026 libraries get INFORMS journals only through EBSCO's
     // Business Source databases; its own site no longer serves institutions.
-    // So EBSCO is where the paper will come from, and it starts at once.
+    // So EBSCO is asked first and alone, and INFORMS's site only if EBSCO has
+    // no answer.
     ebscoFirst: true,
   },
   { name: "Sage", prefixes: ["10.1177/"], pdf: atypon("journals.sagepub.com") },
@@ -272,6 +278,38 @@ export function publisherOf(doi) {
 export function publisherPdfUrl(doi) {
   const publisher = publisherOf(doi);
   return publisher ? publisher.pdf(doi) : null;
+}
+
+// EBSCO's public address for an article ("OpenURL Connection"): the door that
+// library link resolvers and EBSCO's own Passport extension come in through.
+// Opened where you are signed in to EBSCO, it forwards to the article in your
+// library's EBSCO databases. No customer code is needed.
+const EBSCO_DOOR = "https://openurl.ebsco.com/";
+
+export function ebscoByDoi(doi) {
+  return `${EBSCO_DOOR}contentitem/doi:${encodeURIComponent(doi)}`;
+}
+
+// The same article named the way a library catalogue would: journal, volume and
+// first page. For the records EBSCO holds without a DOI. Null when Crossref did
+// not say where the article was printed.
+export function ebscoByIssue(candidate) {
+  const { issn, volume, firstPage } = candidate || {};
+  if (!issn || !volume || !firstPage) return null;
+  const url = new URL(`${EBSCO_DOOR}openurl`);
+  const fields = {
+    genre: "article",
+    issn,
+    volume,
+    issue: candidate.issue,
+    spage: firstPage,
+    date: candidate.year,
+    atitle: candidate.title,
+  };
+  for (const [name, value] of Object.entries(fields)) {
+    if (value) url.searchParams.set(name, String(value));
+  }
+  return url.href;
 }
 
 // The publisher's PDF address as seen from the page you are on, when that page

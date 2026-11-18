@@ -21,7 +21,7 @@ It uses the access you already have. The routes to the published paper are tried
 • the PDF link of the page you are on
 • the publisher's site, if you are on campus or on the university VPN
 • your library's proxy (EZproxy), if you are signed in
-• EBSCO, if your library subscribes
+• EBSCO, if your library has the paper there and you are signed in (it opens the paper's EBSCO page by DOI; it does not search or click there)
 • an open-access copy found through OpenAlex
 
 Files are named by first author, year and first title word, for example tukamuhabwa2015supply.pdf.
@@ -30,7 +30,7 @@ When no route works, the popup says what each one ran into and gives you a link 
 
 Why it exists: on the INFORMS site, signing in through the author's university no longer leads to a download, so every paper meant a detour through the library's databases. Paper Fetch makes that detour for you.
 
-Disclaimer: Paper Fetch works only through the university sign-in you complete yourself. It is not a download service: it does not supply papers, share access, or download on anyone's behalf. Do not use it for bulk downloading; publisher licences forbid it. It has no server and no analytics, and it never sees your password. Not affiliated with INFORMS, EBSCO, Crossref or OpenAlex.
+Disclaimer: Paper Fetch works only through the university sign-in you complete yourself. It is not a download service: it does not supply papers, share access, or download on anyone's behalf. Do not use it for bulk downloading; publisher licences forbid it. It saves one paper per click, has no queue or "download all", and stops at 30 papers an hour. It has no server and no analytics, and it never sees your password. Not affiliated with INFORMS, EBSCO, Crossref or OpenAlex.
 
 Setup: on campus it needs none. Off campus, type your university's name in settings and pick it from the list of about 1,500 libraries.
 
@@ -46,9 +46,9 @@ Download the PDF of a scholarly paper, recognised from the page the user is on o
 
 - activeTab: when the user clicks the toolbar button, reads the current page's address, its article meta tags (DOI, PDF link) and article links, to recognise the paper on that page.
 - downloads: saves the paper's PDF, and checks the finished download so that a sign-in page is not kept as if it were the paper.
-- storage: keeps the user's settings (library proxy link, EBSCO customer code, download folder, auto-download preferences) and the last search.
-- scripting: runs the search and presses the download button on the EBSCO page in a background tab, on the user's request.
-- Host permission `https://*.ebsco.com/*`: the scripting above is limited to EBSCO's site.
+- storage: keeps the user's settings (library proxy link, whether to use EBSCO, download folder, auto-download preferences), the last search, and the times of the papers saved in the last hour, which enforce the limit of 30 papers an hour.
+- scripting: on the user's request the extension opens the paper's EBSCO page in a background tab. It reads there whether the visitor is signed in and whether the article was found, and, once EBSCO's own PDF viewer has loaded the PDF, the address it was loaded from, so that the file can be saved under a proper name. It only reads: nothing on the page is filled in or clicked.
+- Host permission `https://*.ebsco.com/*`: the reading described above is limited to EBSCO's site.
 - Optional host permissions (`https://*/*`, `http://*/*`): never requested as a whole. When the user presses Sign in in settings, the extension asks for the one site of their own library's proxy, to read its sign-in page and show whether they are signed in. Libraries differ per user, so the site cannot be listed in advance.
 
 ## Data usage
