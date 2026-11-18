@@ -41,6 +41,21 @@ export async function launch({ profile, downloads, extraArgs = [] }) {
     ],
     { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
   );
+  // Never leave this browser behind, however the script ends. A stray Chrome
+  // without a window answers clicks on the Chrome icon, and the user's own
+  // Chrome then appears not to open.
+  const reap = () => {
+    try {
+      proc.kill("SIGKILL");
+    } catch {}
+  };
+  process.on("exit", reap);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.once(signal, () => {
+      reap();
+      process.exit(1);
+    });
+  }
   const writer = proc.stdio[3];
   let nextId = 1;
   const pending = new Map();
