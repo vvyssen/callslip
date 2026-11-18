@@ -221,7 +221,15 @@ const PUBLISHERS = [
     prefixes: ["10.1111/", "10.1002/"],
     pdf: (doi) => `https://onlinelibrary.wiley.com/doi/pdfdirect/${doi}`,
   },
-  { name: "INFORMS", prefixes: ["10.1287/"], pdf: atypon("pubsonline.informs.org") },
+  {
+    name: "INFORMS",
+    prefixes: ["10.1287/"],
+    pdf: atypon("pubsonline.informs.org"),
+    // Since 1 January 2026 libraries get INFORMS journals only through EBSCO's
+    // Business Source databases; its own site no longer serves institutions.
+    // So EBSCO is where the paper will come from, and it starts at once.
+    ebscoFirst: true,
+  },
   { name: "Sage", prefixes: ["10.1177/"], pdf: atypon("journals.sagepub.com") },
   {
     name: "Springer",

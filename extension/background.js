@@ -662,6 +662,7 @@ const RUNNERS = {
 // EBSCO takes a browser tab and a search of its own, so the plain links get
 // this much of a head start: when one of them answers with the PDF straight
 // away, EBSCO is never opened. If they have all failed sooner, it starts sooner.
+// A publisher whose papers libraries only get through EBSCO gets no such wait.
 const EBSCO_HEAD_START = 2000;
 
 // Runs the given routes side by side. Returns the one that delivered, if any,
@@ -714,7 +715,8 @@ async function raceRoutes(steps, candidate, settings, publish) {
   if (ebsco) {
     tasks.push(
       (async () => {
-        if (links.length) await Promise.race([Promise.all(links), sleep(EBSCO_HEAD_START)]);
+        const wait = publisherOf(candidate.doi)?.ebscoFirst ? 0 : EBSCO_HEAD_START;
+        if (links.length && wait) await Promise.race([Promise.all(links), sleep(wait)]);
         if (race.winner !== null) {
           standDown(ebsco);
           publish();

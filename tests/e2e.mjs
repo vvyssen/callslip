@@ -322,7 +322,12 @@ try {
   check("reopening on the same page shows it again without a new lookup", (await text(onPage, "count")) === "On this page");
   await browser.send("Emulation.setDeviceMetricsOverride", { width: 420, height: 600, deviceScaleFactor: 2, mobile: false }, onPage);
   await snap(onPage, "popup-on-page.png");
+  // The proxy takes a moment here, which shows when EBSCO was started.
+  fake.behave["pubsonline-informs-org.ezproxy.test-uni.edu"] = { delay: 1200, pdf: true };
+  fake.hits.length = 0;
   result = await download(onPage, () => key(onPage, "Enter"));
+  delete fake.behave["pubsonline-informs-org.ezproxy.test-uni.edu"];
+  check("for an INFORMS paper EBSCO starts at once, without the head start", fake.hits.some((hit) => hit.startsWith("research.ebsco.com/c/test1/search/advanced")), routes(result));
   check("one Enter downloads it", result.status === "done" && result.filename === INFORMS[0].file && isPdf(INFORMS[0].file), `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
   check("through the proxy, since the publisher's own link is paywalled", result.provider === "Library proxy" && stepOf(result, "publisher").state !== "done", routes(result));
   check("the page's link is not asked for twice when it is the publisher's", !stepOf(result, "page"), routes(result));
