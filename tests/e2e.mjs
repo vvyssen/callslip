@@ -316,28 +316,43 @@ try {
   await sleep(400);
 
   // ------------------------------------------------ opened on an article page
-  // INFORMS: the paper is recognised and comes from EBSCO, where libraries have it.
-  await message(popup, { type: "settings:set", settings: { autoDefault: true } });
-  let onPage = await popupOn(`https://pubsonline.informs.org/doi/${INFORMS[0].doi}`);
+  // INFORMS, auto-download off: the paper is recognised and waits for Enter.
+  const informsPage = `https://pubsonline.informs.org/doi/${INFORMS[0].doi}`;
+  await evaluate(popup, "chrome.storage.session.remove('job')");
+  let onPage = await popupOn(informsPage);
   await listed(onPage);
   check("an INFORMS article page is recognised", (await text(onPage, "count")) === "On this page" && (await evaluate(onPage, "document.querySelector('.item-title').textContent")) === INFORMS[0].title, await text(onPage, "count"));
   check("it is marked as an INFORMS paper", (await evaluate(onPage, "document.querySelector('.tag.pub')?.textContent")) === "INFORMS");
   await sleep(1500);
-  check("recognising a page never downloads by itself, even with auto-download on", (await job(onPage))?.candidate?.doi !== INFORMS[0].doi);
-  await message(popup, { type: "settings:set", settings: { autoDefault: false } });
-  await evaluate(onPage, "chrome.storage.session.remove('job')");
-  onPage = await popupOn(`https://pubsonline.informs.org/doi/${INFORMS[0].doi}`);
-  await listed(onPage);
-  check("reopening on the same page shows it again without a new lookup", (await text(onPage, "count")) === "On this page");
+  check("with auto-download off, recognising a page does not download it", (await job(onPage)) === null);
   await browser.send("Emulation.setDeviceMetricsOverride", { width: 420, height: 600, deviceScaleFactor: 2, mobile: false }, onPage);
   await snap(onPage, "popup-on-page.png");
+
+  // Auto-download on: clicking the toolbar button on the page is the whole request.
+  await message(popup, { type: "settings:set", settings: { autoDefault: true } });
+  await evaluate(popup, "chrome.storage.session.remove(['job', 'lastSearch'])");
   fake.hits.length = 0;
-  result = await download(onPage, () => key(onPage, "Enter"));
-  check("one Enter downloads it", result.status === "done" && result.filename === INFORMS[0].file && isPdf(INFORMS[0].file), `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
+  onPage = await popupOn(informsPage);
+  await waitFor(onPage, "chrome.storage.session.get('job').then((data) => Boolean(data.job) && data.job.status !== 'running')", 150000, 400).catch(() => {});
+  result = (await job(onPage)) || { status: "never started", steps: [], candidate: {} };
+  check("with auto-download on, clicking the button on an article page saves the paper", result.status === "done" && result.candidate.doi === INFORMS[0].doi && result.filename === INFORMS[0].file && isPdf(INFORMS[0].file), `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
   check("an INFORMS paper comes from EBSCO", result.provider === "EBSCO", routes(result));
   const askedInforms = fake.hits.filter((hit) => /informs/.test(hit) && hit.includes("/doi/pdf/"));
-  check("and nothing is requested from INFORMS's own site for it", askedInforms.length === 0 && stepOf(result, "publisher").state === "skipped" && stepOf(result, "proxy").state === "skipped", `${JSON.stringify(askedInforms)} ${routes(result)}`);
+  check("and nothing is requested from INFORMS's own site for it", askedInforms.length === 0 && stepOf(result, "publisher")?.state === "skipped" && stepOf(result, "proxy")?.state === "skipped", `${JSON.stringify(askedInforms)} ${routes(result)}`);
   check("the page's link is not asked for twice when it is the publisher's", !stepOf(result, "page"), routes(result));
+
+  // Looking at the same page again must not fetch a second copy...
+  onPage = await popupOn(informsPage);
+  await listed(onPage);
+  await sleep(1500);
+  check("reopening on the same page shows it again, without a new lookup or a second download", (await text(onPage, "count")) === "On this page" && (await job(onPage))?.id === result.id, `${await text(onPage, "count")} ${(await job(onPage))?.id} ${result.id}`);
+  // ...not even after something else was looked up in between.
+  await evaluate(popup, "chrome.storage.session.remove('lastSearch')");
+  onPage = await popupOn(informsPage);
+  await listed(onPage);
+  await sleep(1500);
+  check("a paper saved earlier is not fetched again by itself, and the popup says why", (await job(onPage)) === null && /Already saved/.test(await text(onPage, "hint")) && saved().filter((name) => name.startsWith("green2019sharp")).length === 1, `${await text(onPage, "hint")} ${JSON.stringify(saved())}`);
+  await message(popup, { type: "settings:set", settings: { autoDefault: false } });
 
   // The same site read through the library proxy: the page's own PDF link works.
   onPage = await popupOn(`https://pubsonline-informs-org.ezproxy.test-uni.edu/doi/full/${INFORMS[1].doi}`);
@@ -409,6 +424,26 @@ try {
   check("signed out of EBSCO is recognised", signedOut.state === "failed" && signedOut.detail === "sign-in required", JSON.stringify(signedOut));
   check("with the paper's EBSCO page to sign in on", signedOut.action?.label === "Sign in at EBSCO" && signedOut.action?.url === `https://openurl.ebsco.com/contentitem/doi:${encodeURIComponent(IN_EBSCO.doi)}`, JSON.stringify(signedOut.action));
   check("its tab is closed then too", !(await browser.targets()).some((target) => target.type === "page" && target.url.includes("ebsco")));
+
+  // The connection to EBSCO is dropped: said at once, not waited out.
+  fake.behave.ebsco = { dropped: true };
+  result = await download(popup, () => key(popup, "Enter"));
+  delete fake.behave.ebsco;
+  const dropped = stepOf(result, "ebsco");
+  const sinceStart = result.finishedAt - result.startedAt;
+  check("a dropped connection to EBSCO is reported as such", dropped.state === "failed" && dropped.detail === "couldn't reach EBSCO" && dropped.action?.label === "Open in EBSCO", JSON.stringify(dropped));
+  console.log("      ", `job took ${sinceStart}ms in all (EBSCO failed first, then open access was tried)`);
+
+  // The viewer's own copy of the PDF trickles in for eight seconds here. The
+  // save must start when the viewer asks for the file, not when it has it.
+  fake.behave.ebsco = { slowViewer: true };
+  fake.hits.length = 0;
+  result = await download(popup, () => key(popup, "Enter"));
+  delete fake.behave.ebsco;
+  took = result.finishedAt - result.startedAt;
+  check("the PDF is saved as soon as EBSCO's viewer asks for it, without waiting for the viewer", result.status === "done" && result.provider === "EBSCO" && took < 5000, `${took}ms ${routes(result)}`);
+  await sleep(500);
+  check("and closing the tab cuts the viewer's own request short", fake.hits.includes("content.ebscohost.com/abandoned?content=right1"), JSON.stringify(fake.hits.filter((hit) => hit.includes("content."))));
 
   // ------------------------------------------------ the hourly ceiling
   const savedSoFar = await evaluate(popup, "chrome.storage.local.get('savedAt').then((data) => (data.savedAt || []).length)");

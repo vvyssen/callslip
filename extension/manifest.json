@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Paper Fetch",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "One-click PDFs for INFORMS journals. Other papers through the publisher, your library proxy, EBSCO, or open access.",
   "minimum_chrome_version": "116",
   "icons": {
@@ -14,10 +14,12 @@
     "activeTab",
     "downloads",
     "storage",
-    "scripting"
+    "scripting",
+    "webRequest"
   ],
   "host_permissions": [
-    "https://*.ebsco.com/*"
+    "https://*.ebsco.com/*",
+    "https://content.ebscohost.com/*"
   ],
   "optional_host_permissions": [
     "https://*/*",

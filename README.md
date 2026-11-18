@@ -25,7 +25,7 @@ It only ever uses your own university sign-in. See the [disclaimer](#disclaimer)
 
 **On an INFORMS page**
 
-- On an article, click the Paper Fetch button. The paper is recognised from the page; press <kbd>Enter</kbd> and it is saved.
+- On an article, click the Paper Fetch button. The paper is recognised from the page; press <kbd>Enter</kbd> and it is saved. Switch **Auto-download** on and the click alone saves it. A page that is not recognised leaves you with the search box.
 - On an issue, an Articles in Advance list or search results, the papers on the page are listed. Pick one with <kbd>↑</kbd> <kbd>↓</kbd> and press <kbd>Enter</kbd>.
 - It works the same when you are reading INFORMS through your library's proxy.
 
@@ -72,7 +72,7 @@ The university search covers about 1,500 libraries that use EZproxy, from the pu
 
 EBSCO is not a subject database. It hosts many databases that libraries subscribe to, each with its own field: Business Source for business and management, Academic Search for general scholarship, and others for psychology, education, nursing and so on. For a business school the first is the one that matters, since it carries the full text of a great many management journals. Which databases and years you get depends on your library's subscription. Paper Fetch uses EBSCO as one more way to reach a PDF when the publisher's site does not give it to you. For INFORMS journals it is the only way a library has: since 2026 INFORMS provides institutional online access through EBSCO alone.
 
-**How Paper Fetch uses it.** EBSCO publishes one address per article, by DOI. It is the door that library link resolvers and EBSCO's own Passport extension come in through. Paper Fetch opens that address in a background tab. If you are signed in and your library has the full text, EBSCO forwards the tab to its PDF viewer, and Paper Fetch saves the PDF that the viewer loaded. It does not search EBSCO, type into its pages or press its buttons, and it closes the tab when it is done.
+**How Paper Fetch uses it.** EBSCO publishes one address per article, by DOI. It is the door that library link resolvers and EBSCO's own Passport extension come in through. Paper Fetch opens that address in a background tab. If you are signed in and your library has the full text, EBSCO forwards the tab to its PDF viewer. The moment the viewer asks EBSCO for the PDF, Paper Fetch saves that same address and closes the tab, so the file is fetched once. It does not search EBSCO, type into its pages or press its buttons.
 
 ## What is and isn't covered
 
@@ -93,7 +93,7 @@ EBSCO is not a subject database. It hosts many databases that libraries subscrib
 
 Paper Fetch has no server and no analytics. The title or DOI you search goes to Crossref; the DOI of the paper you download goes to OpenAlex; the download itself goes to the publisher, your library proxy or EBSCO, as it would if you clicked the link yourself. When you click its button, it reads the address and article tags of the page you are on, and that stays in your browser. Settings stay in the browser. It uses the sessions you are already signed in to and never sees a password. Details: [PRIVACY.md](PRIVACY.md).
 
-Permissions it asks for: **activeTab** (read the page you click the button on), **downloads** (save the PDF), **storage** (settings), and **scripting on ebsco.com** (see where EBSCO's page has got to, and read which address its viewer loaded the PDF from). Optionally, and only if you allow it when asked: **your library proxy's site**, to show whether you are signed in.
+Permissions it asks for: **activeTab** (read the page you click the button on), **downloads** (save the PDF), **storage** (settings), and **scripting on ebsco.com** (see where EBSCO's page has got to), and **webRequest on EBSCO's sites** (be told which address EBSCO's viewer asks for the PDF at; requests are only observed, never blocked or changed). Optionally, and only if you allow it when asked: **your library proxy's site**, to show whether you are signed in.
 
 ## Disclaimer
 
@@ -106,7 +106,7 @@ Permissions it asks for: **activeTab** (read the page you click the button on), 
 
 These are properties of the code, not requests to the user.
 
-- **One click, one paper.** There is no queue, no "download all", no schedule, and nothing runs unless you press the button. A second download cannot start while one is running.
+- **One click, one paper.** There is no queue, no "download all", no schedule, and nothing runs unless you press the button. A second download cannot start while one is running, and auto-download never fetches a paper it has already saved since the browser was opened.
 - **30 papers an hour at most.** After that it says when the next one is possible. Nobody reading papers one at a time comes near this; a script would.
 - **No robot on anyone's pages.** It opens addresses that publishers and EBSCO publish for exactly this purpose and saves the PDF they send your browser. It does not fill in forms or press buttons on their sites.
 - **For an INFORMS paper it asks the INFORMS site for nothing** beyond the page you are already reading, as long as EBSCO has the paper.

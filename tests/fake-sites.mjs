@@ -129,6 +129,9 @@ export async function startFakeSites({ dir, port, ebscoDoi }) {
   //   pdf    serve the PDF where a paywall page would be
   //   cut    start sending a PDF, then drop the connection
   // behave.ebsco = { signedOut: true } makes EBSCO treat the visitor as a stranger.
+  // behave.ebsco = { dropped: true } hangs up on anyone asking for EBSCO's door.
+  // behave.ebsco = { slowViewer: true } makes the next PDF request (the viewer's
+  // own) trickle in over several seconds; requests after it are answered at once.
   const behave = {};
   const withPdf = { [ebscoDoi]: "right1", [INFORMS[0].doi]: "informs0" };
   const withoutPdf = { [INFORMS[1].doi]: "nopdf1" };
@@ -239,6 +242,7 @@ export async function startFakeSites({ dir, port, ebscoDoi }) {
       if (path === "/touched") return send("", "text/plain");
 
       if (host === "openurl.ebsco.com") {
+        if (behave.ebsco?.dropped) return void res.destroy();
         const signedOut = Boolean(behave.ebsco?.signedOut);
         // Like the real page: the sign-in state is in the page's data, and the
         // page moves on by itself a moment after it has loaded.
@@ -288,7 +292,19 @@ export async function startFakeSites({ dir, port, ebscoDoi }) {
 
       if (host === "content.ebscohost.com" && path === "/cds/retrieve") {
         // As EBSCO sends it: no file name, readable from any page.
-        return send(PDF, "application/pdf", { "Content-Length": PDF.length, "Access-Control-Allow-Origin": "*" });
+        const headers = { "Content-Type": "application/pdf", "Content-Length": PDF.length, "Access-Control-Allow-Origin": "*" };
+        // A request given up before the file was through is noted.
+        res.on("close", () => {
+          if (!res.writableEnded) hits.push(`${host}/abandoned${url.search}`);
+        });
+        if (behave.ebsco?.slowViewer && !behave.ebsco.served) {
+          behave.ebsco.served = true;
+          res.writeHead(200, headers);
+          res.write(PDF.subarray(0, 2000));
+          return void setTimeout(() => res.end(PDF.subarray(2000)), 8000);
+        }
+        res.writeHead(200, headers);
+        return void res.end(PDF);
       }
 
       res.writeHead(404);

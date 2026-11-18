@@ -56,6 +56,7 @@ const state = {
   starting: false, // download requested, first progress not in yet
   job: null,
   note: "", // one-off message for the action bar
+  savedDois: [], // papers saved since the browser was opened
   fromPage: false, // the list on screen is the papers the page links to
   touched: false, // the person has typed or clicked something
 };
@@ -360,16 +361,24 @@ function showPageList(items) {
   select(Math.max(0, state.candidates.findIndex((candidate) => sameDoi(candidate.doi, chosen))));
 }
 
-// Looks up the paper of the page the popup is on and shows it.
+// Looks up the paper of the page the popup is on and shows it. With
+// auto-download switched on, clicking the toolbar button on a paper's page is
+// the whole request, so the download starts as well; a page that is not
+// recognised leaves the popup as the search form it always was.
 async function showPagePaper() {
   $("title").value = state.page.doi;
   fitTitle();
   await runSearch({ auto: false });
-  if (!state.candidates.length) {
+  const [only, ...others] = state.candidates;
+  if (!only) {
     // Not a paper Crossref knows: say nothing and start blank.
     $("title").value = "";
     fitTitle();
     setNotice(GUIDE);
+  } else if ($("auto").checked && !others.length && sameDoi(only.doi, state.page.doi) && !state.touched && !jobActive()) {
+    // Saved already: looking at the page again must not fetch a second copy.
+    if (state.savedDois.includes(only.doi.toLowerCase())) state.note = "Already saved. Press Enter for another copy.";
+    else download();
   }
   renderFoot();
 }
@@ -530,8 +539,8 @@ function resetList() {
   renderFoot();
 }
 
-// `auto` is off when the search was not asked for, such as the lookup of the
-// page the popup opened on: recognising a paper must not start a download.
+// `auto` is off for the lookup of the page the popup opened on, which decides
+// for itself whether to download (see showPagePaper).
 async function runSearch({ auto = true } = {}) {
   if (state.searching) return;
   const query = formQuery();
@@ -696,7 +705,7 @@ async function init() {
 
   const [response, session, page] = await Promise.all([
     send({ type: "settings:get" }),
-    chrome.storage.session.get(["lastSearch", "selectedDoi", "job"]),
+    chrome.storage.session.get(["lastSearch", "selectedDoi", "job", "savedDois"]),
     readPage(),
   ]);
   if (response?.settings) state.settings = { ...state.settings, ...response.settings };
@@ -706,6 +715,7 @@ async function init() {
   offerProxy();
 
   state.job = session.job || null;
+  state.savedDois = session.savedDois || [];
   renderJob();
 
   // What to show, most specific first: the paper on this page, the papers this

@@ -331,13 +331,15 @@ async function viaOpenAccess(candidate, settings, note, race, lookup) {
 // lib.js). Opened in a tab where you are signed in to EBSCO, it forwards to the
 // article: to EBSCO's PDF viewer when your library has the full text, to the
 // record's details when it has not. Nothing on those pages is typed into or
-// clicked. The viewer loads the PDF itself, and the address it loaded it from
-// is then saved the way any other link is.
+// clicked. The viewer asks for the PDF itself; the browser reports which
+// address it asked for, that address is saved the way any other link is, and
+// the tab is closed, so the PDF is fetched once.
 
 const EBSCO_DOOR = /^https:\/\/openurl\.ebsco\.com\//;
 const EBSCO_VIEWER = /^https:\/\/research\.ebsco\.com\/c\/[^/]+\/viewer\/pdf\//;
 const EBSCO_APP = /^https:\/\/research\.ebsco\.com\/c\/[^/]+\//;
 const EBSCO_LOGIN = /^https:\/\/(login|logon)\.ebsco\./;
+const EBSCO_PDF = "https://content.ebscohost.com/cds/retrieve*";
 
 // tabs.update() returns before the navigation starts, while the tab still
 // reports the old page as "complete". Wait for the new load to begin first, or
@@ -359,19 +361,6 @@ async function inTab(tabId, func, args = []) {
   return result?.result;
 }
 
-async function waitInTab(tabId, func, args = [], timeout = 15000, interval = 400) {
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    let value = null;
-    try {
-      value = await inTab(tabId, func, args);
-    } catch {}
-    if (value) return value;
-    await sleep(interval);
-  }
-  return null;
-}
-
 // --- functions below run inside EBSCO's pages; they only read ---
 
 // On EBSCO's door page: "signin" when the visitor is not signed in to EBSCO,
@@ -389,8 +378,9 @@ function pageEbscoDoor() {
 }
 
 // In EBSCO's PDF viewer: the address the viewer loaded the PDF from, once it
-// has. The page keeps a list of what it has loaded; that list is made longer
-// first so a busy page cannot push the PDF off its end.
+// has. This is the slower way to learn it, kept for a request the browser does
+// not report against the tab. The page keeps a list of what it has loaded; that
+// list is made longer first so a busy page cannot push the PDF off its end.
 function pageEbscoPdf() {
   performance.setResourceTimingBufferSize(1000);
   const loaded = performance
@@ -401,11 +391,25 @@ function pageEbscoPdf() {
 
 // --- end of in-page functions ---
 
+// Runs a reading function in the tab. When the connection was dropped the tab
+// shows the browser's own error page, which cannot be read at all: that is
+// reported as what it is instead of being waited out.
+async function readEbsco(tabId, func, door) {
+  try {
+    return await inTab(tabId, func);
+  } catch (error) {
+    if (/error page/i.test(error?.message || "")) {
+      throw new StepError("couldn't reach EBSCO", { label: "Open in EBSCO", url: door });
+    }
+    return null;
+  }
+}
+
 // Follows the tab from EBSCO's door to wherever EBSCO sends it. Any page of
 // EBSCO's app other than the PDF viewer (the record's details, an HTML-only
 // article) means there is no PDF to save; it has to stay put for a moment
 // before that is believed, in case the app is only passing through.
-async function ebscoArrival(tabId, timeout = 40000) {
+async function ebscoArrival(tabId, door, timeout = 40000) {
   const start = Date.now();
   let resting = { url: "", since: 0 };
   while (Date.now() - start < timeout) {
@@ -415,27 +419,66 @@ async function ebscoArrival(tabId, timeout = 40000) {
     if (tab.status === "complete") {
       if (EBSCO_APP.test(url)) {
         if (resting.url !== url) resting = { url, since: Date.now() };
-        else if (Date.now() - resting.since >= 1200) return { url };
+        else if (Date.now() - resting.since >= 1200) {
+          await readEbsco(tabId, () => true, door);
+          return { url };
+        }
       }
       if (EBSCO_LOGIN.test(url)) return { signIn: true };
       if (EBSCO_DOOR.test(url)) {
-        let state = null;
-        try {
-          state = await inTab(tabId, pageEbscoDoor);
-        } catch {}
+        const state = await readEbsco(tabId, pageEbscoDoor, door);
         if (state === "missing") return { missing: true };
         if (state === "signin") return { signIn: true };
       }
     }
     await sleep(300);
   }
-  throw new StepError("EBSCO did not open the article");
+  throw new StepError("EBSCO did not open the article", { label: "Open in EBSCO", url: door });
+}
+
+// Tells when the given tab asks EBSCO's content server for a PDF, and for which
+// address. This only listens to what the browser reports about that tab's
+// requests; nothing is held up or changed.
+function watchEbscoPdf(tabId) {
+  let listener = null;
+  const address = new Promise((resolve) => {
+    if (!chrome.webRequest) return; // not allowed to listen: the page is read instead
+    listener = (details) => resolve(details.url);
+    chrome.webRequest.onBeforeRequest.addListener(listener, { urls: [EBSCO_PDF], tabId });
+  });
+  return {
+    address,
+    release() {
+      if (listener) chrome.webRequest.onBeforeRequest.removeListener(listener);
+    },
+  };
+}
+
+// The address of the PDF in EBSCO's viewer: from the browser's report the
+// moment the viewer asks for it, or failing that from the page once it has
+// loaded it.
+async function ebscoPdfAddress(tabId, reported, stopped, timeout = 40000) {
+  let address = null;
+  reported.then((url) => {
+    address = url;
+  });
+  const start = Date.now();
+  while (Date.now() - start < timeout && !stopped()) {
+    if (address) return address;
+    try {
+      const loaded = await inTab(tabId, pageEbscoPdf);
+      if (loaded) return address || loaded;
+    } catch {}
+    await Promise.race([reported, sleep(300)]);
+  }
+  return address;
 }
 
 async function viaEbsco(candidate, settings, note, race) {
   const halt = stopper();
   const { until } = halt;
   let tabId = null;
+  let watch = null;
   const closeTab = () => {
     if (tabId === null) return;
     chrome.tabs.remove(tabId).catch(() => {});
@@ -451,13 +494,14 @@ async function viaEbsco(candidate, settings, note, race) {
     // Not wrapped in until(): the tab has to be known here to be closed again.
     const tab = await chrome.tabs.create({ url: door, active: false });
     tabId = tab.id;
+    watch = watchEbscoPdf(tab.id);
     if (halt.stopped) throw new Stopped();
-    let found = await until(ebscoArrival(tab.id));
+    let found = await until(ebscoArrival(tab.id, door));
     const byIssue = found.missing ? ebscoByIssue(candidate) : null;
     if (byIssue) {
       note("trying volume and page");
       await until(navigate(tab.id, byIssue));
-      found = await until(ebscoArrival(tab.id));
+      found = await until(ebscoArrival(tab.id, door));
     }
     if (found.signIn) throw new StepError("sign-in required", { label: "Sign in at EBSCO", url: door });
     // EBSCO knows this browser: the popup can stop pointing at library setup.
@@ -468,8 +512,9 @@ async function viaEbsco(candidate, settings, note, race) {
     }
 
     note("opening the PDF");
-    const pdf = await until(waitInTab(tab.id, pageEbscoPdf, [], 40000, 300));
+    const pdf = await until(ebscoPdfAddress(tab.id, watch.address, () => halt.stopped));
     if (!pdf) throw new StepError("EBSCO did not show the PDF", { label: "Open in EBSCO", url: found.url });
+    // Closing the tab ends the viewer's own request for the file.
     closeTab();
     note("saving");
     return await saveFrom(pdf, candidate, settings, race, "ebsco");
@@ -478,6 +523,7 @@ async function viaEbsco(candidate, settings, note, race) {
     if (halt.stopped) throw new Stopped();
     throw error;
   } finally {
+    watch?.release();
     closeTab();
   }
 }
@@ -708,8 +754,14 @@ async function paceLimit() {
   return `${PACE.papers} papers an hour is the limit, to stay within library licences. Next one at ${at}.`;
 }
 
-async function noteSave() {
+// Also remembered, until the browser is closed: which papers were saved, so
+// that auto-download does not fetch one of them a second time by itself.
+const SAVED_KEY = "savedDois";
+
+async function noteSave(doi) {
   await chrome.storage.local.set({ [PACE_KEY]: [...(await recentSaves()), Date.now()] });
+  const { [SAVED_KEY]: dois = [] } = await chrome.storage.session.get(SAVED_KEY);
+  await chrome.storage.session.set({ [SAVED_KEY]: [...dois, doi.toLowerCase()].slice(-200) });
 }
 
 async function startDownload(candidate) {
@@ -732,7 +784,7 @@ async function startDownload(candidate) {
       if (record) candidate = { ...candidate, ...record };
     }
     const job = await runJob(candidate);
-    if (job.status === "done") await noteSave();
+    if (job.status === "done") await noteSave(candidate.doi);
     return { job };
   } finally {
     clearInterval(awake);
