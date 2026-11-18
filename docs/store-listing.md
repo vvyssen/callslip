@@ -5,15 +5,17 @@ or 640×400; the ones in `docs/screenshots` are popup-sized and need a backdrop.
 
 ## Name
 
-Paper Fetch
+Callslip (Chinese listing: 取经 Callslip)
 
 ## Summary (132 characters max)
 
-One-click PDFs for INFORMS journals. Other papers through the publisher, your library proxy, EBSCO, or open access.
+One-click download of INFORMS articles through your library. Other papers via the publisher, library proxy, EBSCO or open access.
+
+Chinese: INFORMS 文章一键下载，用的是你自己学校图书馆的权限。其他论文可经出版社、图书馆代理、EBSCO 或开放获取下载。
 
 ## Description
 
-On an article in Management Science, Operations Research, M&SOM or any other INFORMS journal, click Paper Fetch and press Enter: the paper is recognised from the page and saved as a properly named PDF. With Auto-download switched on, the click alone does it. On an issue or a search results page, the papers on the page are listed for you to pick from.
+On an article in Management Science, Operations Research, M&SOM or any other INFORMS journal, click Callslip and press Enter: the paper is recognised from the page and saved as a properly named PDF. With Auto-download switched on, the click alone does it. On an issue or a search results page, the papers on the page are listed for you to pick from.
 
 It works for other papers too. Open it on another publisher's article page, or paste any title or DOI; the paper is looked up on Crossref and the matches are listed.
 
@@ -28,9 +30,9 @@ Files are named by first author, year and first title word, for example tukamuha
 
 When no route works, the popup says what each one ran into and gives you a link to open the article through your library.
 
-Why it exists: on the INFORMS site, signing in through the author's university no longer leads to a download, so every paper meant a detour through the library's databases. Paper Fetch makes that detour for you.
+Why it exists: on the INFORMS site, signing in through the author's university no longer leads to a download, so every paper meant a detour through the library's databases. Callslip makes that detour for you.
 
-Disclaimer: Paper Fetch works only through the university sign-in you complete yourself. It is not a download service: it does not supply papers, share access, or download on anyone's behalf. Do not use it for bulk downloading; publisher licences forbid it. It saves one paper per click, has no queue or "download all", and stops at 30 papers an hour. It has no server and no analytics, and it never sees your password. Not affiliated with INFORMS, EBSCO, Crossref or OpenAlex.
+Disclaimer: Callslip works only through the university sign-in you complete yourself. It is not a download service: it does not supply papers, share access, or download on anyone's behalf. Do not use it for bulk downloading; publisher licences forbid it. It saves one paper per click, has no queue or "download all", and stops at 30 papers an hour. It has no server and no analytics, and it never sees your password. Not affiliated with INFORMS, EBSCO, Crossref or OpenAlex.
 
 Setup: on campus it needs none. Off campus, type your university's name in settings and pick it from the list of about 1,500 libraries.
 

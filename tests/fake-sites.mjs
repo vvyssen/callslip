@@ -67,7 +67,7 @@ export const NO_PATTERN = {
   file: "fare2018technical.pdf",
 };
 
-const PDF = Buffer.concat([Buffer.from("%PDF-1.4\n% paper-fetch test file\n"), Buffer.alloc(40000, 0x20)]);
+const PDF = Buffer.concat([Buffer.from("%PDF-1.4\n% callslip test file\n"), Buffer.alloc(40000, 0x20)]);
 const page = (title, body, head = "") =>
   `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>${head}</head><body>${body}</body></html>`;
 
@@ -120,7 +120,7 @@ const MANAGEMENT_SCIENCE = ["0025-1909", "1526-5501"];
 //   INFORMS[2]   full text, but the record has no DOI: journal, volume and page find it
 export async function startFakeSites({ dir, port, ebscoDoi }) {
   execFileSync("openssl", [
-    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=paper-fetch-test",
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=callslip-test",
     "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem"),
   ], { stdio: "ignore" });
   const hits = [];

@@ -243,6 +243,17 @@ textarea::placeholder {
   outline-offset: 2px;
 }
 
+/* ---- the name ---- */
+
+.brand-zh {
+  margin-left: 0.3em;
+  font-family: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", var(--serif);
+  font-size: 0.86em;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--accent-ink);
+}
+
 /* ---- small parts ---- */
 
 .spinner {

@@ -31,7 +31,7 @@ const IN_EBSCO = {
 const OPEN_ACCESS = { doi: "10.1371/journal.pmed.0020124" };
 const OPEN_AT_PUBLISHER = { doi: "10.1038/s41586-020-2649-2", publisher: "Nature" };
 
-const work = mkdtempSync(join(tmpdir(), "paper-fetch-e2e-"));
+const work = mkdtempSync(join(tmpdir(), "callslip-e2e-"));
 const downloads = join(work, "downloads");
 const failures = [];
 const check = (name, ok, detail = "") => {

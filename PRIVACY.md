@@ -1,6 +1,6 @@
 # Privacy
 
-Paper Fetch has no server of its own, no account, no analytics and no advertising. Nothing is sent to its authors.
+Callslip has no server of its own, no account, no analytics and no advertising. Nothing is sent to its authors.
 
 ## What leaves your browser, and where it goes
 
@@ -12,11 +12,11 @@ Paper Fetch has no server of its own, no account, no analytics and no advertisin
 | The settings page is open, and you allowed it | Requests to your library proxy's own sign-in address, to see whether you are signed in. Nothing about you is added to them. | Your library's proxy |
 | You search for your university in settings | A request for the public list of library proxies. What you type is matched in your browser and is not sent. | libproxy-db.org |
 
-The download requests are the same ones your browser would make if you clicked the link yourself, and they carry the sessions you are already signed in to. Paper Fetch does not read, copy or store your cookies or passwords.
+The download requests are the same ones your browser would make if you clicked the link yourself, and they carry the sessions you are already signed in to. Callslip does not read, copy or store your cookies or passwords.
 
 ## What it reads
 
-When you click the Paper Fetch button, it reads the page that tab is showing: its address, the tags that name the article (DOI, PDF link) and the article links on the page. This is how it recognises the paper you are looking at. It happens only on that click, only for that tab, and what it reads stays in your browser apart from the DOI lookup above.
+When you click the Callslip button, it reads the page that tab is showing: its address, the tags that name the article (DOI, PDF link) and the article links on the page. This is how it recognises the paper you are looking at. It happens only on that click, only for that tab, and what it reads stays in your browser apart from the DOI lookup above.
 
 ## What is stored, and where
 
