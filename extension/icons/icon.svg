@@ -1,15 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- Callslip, small: a call slip with its stub notches, stamped with a seal that
-       carries the download arrow. Used in the toolbar and in the pages' headers. -->
+  <!-- Callslip: a library call slip, its stub marked off by a notch in each edge,
+       with the paper on its way down. -->
   <rect width="64" height="64" rx="14" fill="#1f5c4a"/>
-  <g transform="rotate(-8 32 32)">
-    <rect x="14" y="5.5" width="36" height="53" rx="3.6" fill="#fffdf8"/>
-    <circle cx="14" cy="19.5" r="3" fill="#1f5c4a"/>
-    <circle cx="50" cy="19.5" r="3" fill="#1f5c4a"/>
-    <path d="M21 27.5 H43" stroke="#1f5c4a" stroke-width="3.4" stroke-linecap="round"/>
-    <g transform="rotate(9 37 44)">
-      <rect x="26.5" y="33.5" width="21" height="21" rx="3.4" fill="#c8452f"/>
-      <path d="M37 38.3 V49 M32.4 44.6 L37 49.3 L41.6 44.6" fill="none" stroke="#fffdf8" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
-    </g>
-  </g>
+  <rect x="17.5" y="9.5" width="29" height="45" rx="4.5" fill="#fffdf8"/>
+  <circle cx="17.5" cy="23.5" r="3.4" fill="#1f5c4a"/>
+  <circle cx="46.5" cy="23.5" r="3.4" fill="#1f5c4a"/>
+  <rect x="26" y="15" width="12" height="3.4" rx="1.7" fill="#1f5c4a" opacity=".32"/>
+  <path d="M32 30.5 V45 M25.2 39 L32 45.8 L38.8 39" fill="none" stroke="#1f5c4a" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

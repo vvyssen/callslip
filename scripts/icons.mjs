@@ -1,8 +1,6 @@
 // Renders the icons to the PNG sizes the manifest lists.
 //   node scripts/icons.mjs
-// icon.svg is the simplified mark for the toolbar (16 and 32px); icon-large.svg
-// has the detail that only shows from 48px up. The 128px file keeps an 8px
-// margin, as store icons should.
+// The 128px file keeps an 8px margin, as store icons should.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -10,14 +8,13 @@ import { fileURLToPath } from "node:url";
 import { launch, sleep } from "../tests/cdp.mjs";
 
 const icons = resolve(dirname(fileURLToPath(import.meta.url)), "../extension/icons");
-const small = readFileSync(join(icons, "icon.svg"), "utf8");
-const large = readFileSync(join(icons, "icon-large.svg"), "utf8");
+const svg = readFileSync(join(icons, "icon.svg"), "utf8");
 const work = mkdtempSync(join(tmpdir(), "callslip-icons-"));
 const browser = await launch({ profile: join(work, "profile"), downloads: join(work, "downloads") });
 try {
   const page = await browser.open("about:blank");
   await browser.send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } }, page);
-  for (const [size, art, svg] of [[16, 16, small], [32, 32, small], [48, 48, large], [128, 112, large]]) {
+  for (const [size, art] of [[16, 16], [32, 32], [48, 48], [128, 112]]) {
     await browser.send("Emulation.setDeviceMetricsOverride", { width: size, height: size, deviceScaleFactor: 1, mobile: false }, page);
     const inset = (size - art) / 2;
     await browser.evaluate(page, `(document.documentElement.innerHTML = ${JSON.stringify(

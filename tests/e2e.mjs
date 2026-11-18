@@ -66,7 +66,10 @@ const { evaluate, waitFor, key } = browser;
 const text = (page, id) => evaluate(page, `document.getElementById('${id}').textContent`);
 const click = (page, id) => evaluate(page, `(document.getElementById('${id}').click(), true)`);
 const message = (page, payload) => evaluate(page, `chrome.runtime.sendMessage(${JSON.stringify(payload)})`);
-const job = (page) => evaluate(page, "chrome.storage.session.get('job').then((data) => data.job || null)");
+const jobs = (page) => evaluate(page, "chrome.storage.session.get('jobs').then((data) => data.jobs || [])");
+const job = async (page) => (await jobs(page))[0] || null; // the newest one
+// Takes the finished downloads off the list, as dismissing them in the popup does.
+const clearJobs = (page) => evaluate(page, "chrome.runtime.sendMessage({ type: 'jobs:clear' }).then(() => true)");
 const stepOf = (result, name) => result.steps.find((step) => step.key === name);
 const routes = (result) => JSON.stringify(result.steps.map((step) => [step.key, step.state, step.detail]));
 const snap = (page, name, options) => (shots ? browser.shot(page, join(shots, name), options) : null);
@@ -90,10 +93,10 @@ async function search(page, value) {
 
 // Starts a download with `start` and returns the finished job.
 async function download(page, start) {
-  await evaluate(page, "chrome.storage.session.remove('job')");
+  await clearJobs(page);
   await start();
-  await waitFor(page, "chrome.storage.session.get('job').then((data) => Boolean(data.job))", 10000);
-  await waitFor(page, "chrome.storage.session.get('job').then((data) => data.job.status !== 'running')", 150000, 400);
+  await waitFor(page, "chrome.storage.session.get('jobs').then((data) => (data.jobs || []).length > 0)", 10000);
+  await waitFor(page, "chrome.storage.session.get('jobs').then((data) => data.jobs.every((item) => item.status !== 'running'))", 150000, 400);
   await sleep(300);
   return job(page);
 }
@@ -318,7 +321,7 @@ try {
   // ------------------------------------------------ opened on an article page
   // INFORMS, auto-download off: the paper is recognised and waits for Enter.
   const informsPage = `https://pubsonline.informs.org/doi/${INFORMS[0].doi}`;
-  await evaluate(popup, "chrome.storage.session.remove('job')");
+  await clearJobs(popup);
   let onPage = await popupOn(informsPage);
   await listed(onPage);
   check("an INFORMS article page is recognised", (await text(onPage, "count")) === "On this page" && (await evaluate(onPage, "document.querySelector('.item-title').textContent")) === INFORMS[0].title, await text(onPage, "count"));
@@ -330,10 +333,11 @@ try {
 
   // Auto-download on: clicking the toolbar button on the page is the whole request.
   await message(popup, { type: "settings:set", settings: { autoDefault: true } });
-  await evaluate(popup, "chrome.storage.session.remove(['job', 'lastSearch'])");
+  await clearJobs(popup);
+  await evaluate(popup, "chrome.storage.session.remove('lastSearch')");
   fake.hits.length = 0;
   onPage = await popupOn(informsPage);
-  await waitFor(onPage, "chrome.storage.session.get('job').then((data) => Boolean(data.job) && data.job.status !== 'running')", 150000, 400).catch(() => {});
+  await waitFor(onPage, "chrome.storage.session.get('jobs').then((data) => (data.jobs || []).length > 0 && data.jobs[0].status !== 'running')", 150000, 400).catch(() => {});
   result = (await job(onPage)) || { status: "never started", steps: [], candidate: {} };
   check("with auto-download on, clicking the button on an article page saves the paper", result.status === "done" && result.candidate.doi === INFORMS[0].doi && result.filename === INFORMS[0].file && isPdf(INFORMS[0].file), `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
   check("an INFORMS paper comes from EBSCO", result.provider === "EBSCO", routes(result));
@@ -370,11 +374,30 @@ try {
   const issue = await evaluate(onPage, "[...document.querySelectorAll('.item-title')].map((node) => node.textContent)");
   check("an issue page lists its papers", (await text(onPage, "count")) === "3 papers on this page" && JSON.stringify(issue) === JSON.stringify(INFORMS.map((paper) => paper.title)), JSON.stringify(issue));
   check("the last download's result stays while it is one of the listed papers", await evaluate(onPage, "!document.getElementById('job').hidden"));
-  await evaluate(onPage, "chrome.storage.session.remove('job')");
+  await clearJobs(onPage);
   await sleep(300);
   await browser.send("Emulation.setDeviceMetricsOverride", { width: 420, height: 600, deviceScaleFactor: 2, mobile: false }, onPage);
   await snap(onPage, "popup-page-list.png");
+  // Two papers asked for one right after the other are fetched side by side.
+  await clearJobs(onPage);
+  await key(onPage, "Enter");
   await key(onPage, "ArrowDown");
+  await key(onPage, "Enter");
+  await waitFor(onPage, "chrome.storage.session.get('jobs').then((data) => (data.jobs || []).length === 2)", 10000).catch(() => {});
+  const twice = await message(onPage, { type: "download", candidate: { doi: INFORMS[0].doi, title: INFORMS[0].title } });
+  check("a paper already on its way is not fetched a second time", /already downloading/.test(twice?.error || ""), JSON.stringify(twice));
+  const cards = await evaluate(onPage, "document.querySelectorAll('#job .job').length");
+  await waitFor(onPage, "chrome.storage.session.get('jobs').then((data) => data.jobs.every((item) => item.status !== 'running'))", 150000, 400).catch(() => {});
+  const pair = await jobs(onPage);
+  const [later, earlier] = pair;
+  check("two downloads run at the same time", pair.length === 2 && pair.every((item) => item.status === "done") && later.startedAt < earlier.finishedAt && later.candidate.doi === INFORMS[1].doi && earlier.candidate.doi === INFORMS[0].doi, JSON.stringify(pair.map((item) => [item.candidate.doi, item.status, item.startedAt, item.finishedAt])));
+  check("and the popup shows both", cards === 2, String(cards));
+  await browser.send("Emulation.setDeviceMetricsOverride", { width: 420, height: 600, deviceScaleFactor: 2, mobile: false }, onPage);
+  const fits = await evaluate(onPage, "({ app: Math.round(document.querySelector('.app').getBoundingClientRect().height), foot: Math.round(document.getElementById('foot').getBoundingClientRect().bottom) })");
+  check("still within 600px with both on screen", fits.app <= 600 && fits.foot <= 600, JSON.stringify(fits));
+  await snap(onPage, "popup-two-downloads.png");
+  await snap(onPage, "reset.png");
+
   await key(onPage, "ArrowDown");
   fake.hits.length = 0;
   result = await download(onPage, () => key(onPage, "Enter"));
@@ -383,14 +406,16 @@ try {
 
   // A slow connection: the page has its title and tags but will not finish
   // loading for a long time. The popup must not wait for it.
-  await evaluate(popup, "chrome.storage.session.remove(['job', 'lastSearch'])");
+  await clearJobs(popup);
+  await evaluate(popup, "chrome.storage.session.remove('lastSearch')");
   began = Date.now();
   onPage = await popupOn(`https://pubsonline.informs.org/doi/${INFORMS[0].doi}?slow=1`, { loaded: false });
   const quick = await waitFor(onPage, "document.querySelectorAll('#results .item').length > 0", 12000).then(() => true, () => false);
   check("a page that is still loading is recognised without waiting for it", quick && (await text(onPage, "count")) === "On this page", `${Date.now() - began}ms ${await text(onPage, "notice")}`);
 
   // A list that arrives in parts: the popup catches up as the page fills in.
-  await evaluate(popup, "chrome.storage.session.remove(['job', 'lastSearch'])");
+  await clearJobs(popup);
+  await evaluate(popup, "chrome.storage.session.remove('lastSearch')");
   onPage = await popupOn("https://pubsonline.informs.org/toc/mnsc/66/1?slow=1", { loaded: false });
   const filled = await waitFor(onPage, "document.getElementById('count').textContent === '3 papers on this page'", 12000).then(() => true, () => false);
   check("a list that is still loading fills in as it arrives", filled, await text(onPage, "count"));
@@ -449,7 +474,7 @@ try {
   const savedSoFar = await evaluate(popup, "chrome.storage.local.get('savedAt').then((data) => (data.savedAt || []).length)");
   check("every saved paper is counted", savedSoFar >= 8, String(savedSoFar));
   await evaluate(popup, "chrome.storage.local.set({ savedAt: Array.from({ length: 30 }, (_, i) => Date.now() - 60000 - i * 1000) }).then(() => true)");
-  await evaluate(popup, "chrome.storage.session.remove('job')");
+  await clearJobs(popup);
   await key(popup, "Enter");
   await waitFor(popup, "/limit/.test(document.getElementById('hint').textContent)", 8000).catch(() => {});
   check("after 30 papers in an hour the next one is refused, with the time it frees up", /^30 papers an hour is the limit.*Next one at \d/.test(await text(popup, "hint")) && (await job(popup)) === null, await text(popup, "hint"));
@@ -502,7 +527,7 @@ try {
   await click(popup, "auto");
   await sleep(300);
 
-  await evaluate(popup, "chrome.storage.session.remove('job')");
+  await clearJobs(popup);
   await evaluate(popup, `(() => { const t = document.getElementById('title'); t.focus(); t.setSelectionRange(t.value.length, t.value.length); return true; })()`);
   await browser.send("Input.insertText", { text: " revisited" }, popup);
   await sleep(200);

@@ -329,17 +329,53 @@ body {
 
 /* ---- download progress ---- */
 
+/* Several downloads stack up here; past a few of them the stack scrolls, so
+   the action bar stays on screen. */
+.jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 268px;
+  margin: 0 10px 10px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.matches[hidden] + .jobs {
+  margin-top: 2px;
+}
+
 .job {
   flex: none;
-  margin: 0 10px 10px;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface);
 }
 
-.matches[hidden] + .job {
-  margin-top: 2px;
+/* a running or failed download told in one line */
+.job-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.job-line-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.job-line .btn {
+  height: 26px;
 }
 
 .job-head {

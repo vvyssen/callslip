@@ -1,6 +1,6 @@
 # Callslip · 取经
 
-<img src="extension/icons/icon128.png" width="84" align="right" alt="Callslip: a call slip stamped with a seal">
+<img src="extension/icons/icon128.png" width="84" align="right" alt="Callslip: a call slip">
 
 [中文说明](README.zh-CN.md)
 
@@ -23,7 +23,7 @@ On the INFORMS site, signing in through my university no longer leads to a downl
 
 It only ever uses your own university sign-in. See the [disclaimer](#disclaimer).
 
-**The name.** A call slip is the form you hand in at a library desk to have one item brought up from the stacks: one slip, one item. That is what this does with a DOI. Its Chinese name, 取经, means "fetching the scriptures": in *Journey to the West* they are fetched by presenting a pass to be stamped at every gate on the way, not by going around the gates. The icon is that slip with its stamp.
+**The name.** A call slip is the form you hand in at a library desk to have one item brought up from the stacks: one slip, one item. That is what this does with a DOI. Its Chinese name, 取经, means "fetching the scriptures": in *Journey to the West* they are fetched by presenting a pass to be stamped at every gate on the way, not by going around the gates. The icon is that slip.
 
 ## What it does
 
@@ -48,7 +48,7 @@ It only ever uses your own university sign-in. See the [disclaimer](#disclaimer)
 | EBSCO | your library has the paper in EBSCO and you are signed in |
 | Open access | [OpenAlex](https://openalex.org/) knows a free copy |
 
-The file lands in Downloads as `<first author><year><first title word>.pdf`, for example `green2019sharp.pdf`. If every route fails, the popup says what each one ran into and offers one click to open the article through your library. The download keeps going if you close the popup.
+The file lands in Downloads as `<first author><year><first title word>.pdf`, for example `green2019sharp.pdf`. If every route fails, the popup says what each one ran into and offers one click to open the article through your library. The download keeps going if you close the popup, and you can ask for another paper while one is still on its way.
 
 ## Install
 
@@ -110,8 +110,8 @@ Permissions it asks for: **activeTab** (read the page you click the button on), 
 
 These are properties of the code, not requests to the user.
 
-- **One click, one paper.** There is no queue, no "download all", no schedule, and nothing runs unless you press the button. A second download cannot start while one is running, and auto-download never fetches a paper it has already saved since the browser was opened.
-- **30 papers an hour at most.** After that it says when the next one is possible. Nobody reading papers one at a time comes near this; a script would.
+- **One click, one paper.** There is no queue, no "download all", no schedule, and nothing runs unless you press the button. Several papers can be on their way at once, but each was asked for by its own click; the same paper is never fetched twice at the same time, and auto-download never fetches a paper it has already saved since the browser was opened.
+- **30 papers an hour at most**, counting the ones still on their way. After that it says when the next one is possible. Nobody reading papers one at a time comes near this; a script would.
 - **No robot on anyone's pages.** It opens addresses that publishers and EBSCO publish for exactly this purpose and saves the PDF they send your browser. It does not fill in forms or press buttons on their sites.
 - **For an INFORMS paper it asks the INFORMS site for nothing** beyond the page you are already reading, as long as EBSCO has the paper.
 - **No way around a gate.** At a sign-in page, a paywall or an "are you human" check it stops and hands you the page.

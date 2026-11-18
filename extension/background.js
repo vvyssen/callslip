@@ -23,7 +23,7 @@ const DEFAULTS = {
   subfolder: "",
 };
 
-const JOB_KEY = "job";
+const JOBS_KEY = "jobs";
 const SEARCH_KEY = "lastSearch";
 
 // A provider failure the popup can explain, optionally with a one-click remedy:
@@ -530,13 +530,55 @@ async function viaEbsco(candidate, settings, note, race) {
 
 // -------------------------------------------------------------------- jobs
 //
-// One download at a time. Its progress lives in chrome.storage.session so the
-// popup can be closed and reopened mid-download and still show where it is.
+// Each paper being fetched is a job, and several can be on their way at once.
+// Their progress lives in chrome.storage.session, newest first, so the popup
+// can be closed and reopened mid-download and still show where each one is.
 
-let running = false;
+const JOBS_KEPT = 8; // finished jobs beyond this many are dropped, oldest first
+const inFlight = new Map(); // DOI (lower case) -> job id, for the papers being fetched right now
+let jobCount = 0;
 
-async function readJob() {
-  return (await chrome.storage.session.get(JOB_KEY))[JOB_KEY] || null;
+// Every change to the stored list goes through here, one at a time. Several
+// jobs report at once, and each change has to start from what the last left.
+let jobWrites = Promise.resolve();
+
+function changeJobs(change) {
+  const write = jobWrites.then(async () => {
+    const { [JOBS_KEY]: jobs = [] } = await chrome.storage.session.get(JOBS_KEY);
+    const next = change(jobs);
+    await chrome.storage.session.set({ [JOBS_KEY]: next });
+    return next;
+  });
+  jobWrites = write.catch(() => {});
+  return write;
+}
+
+// Writes where a job stands. The state is copied now, so a later change to the
+// job cannot overtake this one on its way into storage.
+function publishJob(job) {
+  const snapshot = structuredClone(job);
+  return changeJobs((jobs) => {
+    const known = jobs.some((item) => item.id === snapshot.id);
+    const list = known ? jobs.map((item) => (item.id === snapshot.id ? snapshot : item)) : [snapshot, ...jobs];
+    const kept = [];
+    for (const item of list) {
+      if (item.status === "running" || kept.length < JOBS_KEPT) kept.push(item);
+    }
+    return kept;
+  }).catch(() => {});
+}
+
+// Takes finished jobs off the list: the one named, or all of them except those
+// for the papers in `keep`. A job still running is never removed.
+function dismissJobs({ id = null, keep = [] } = {}) {
+  const wanted = new Set(keep.map((doi) => String(doi).toLowerCase()));
+  return changeJobs((jobs) =>
+    jobs.filter((job) => {
+      if (job.status === "running") return true;
+      if (id !== null) return job.id !== id;
+      return wanted.has(job.candidate.doi.toLowerCase());
+    }),
+  );
 }
 
 function sameAddress(a, b) {
@@ -655,23 +697,12 @@ async function raceRoutes(steps, candidate, settings, publish) {
   return { won, stopped };
 }
 
-async function runJob(candidate) {
+// Fetches the paper for a job that has already been announced.
+async function runJob(job, candidate) {
   const settings = await getSettings();
-  const job = {
-    id: `${Date.now()}`,
-    status: "running",
-    startedAt: Date.now(),
-    candidate: { doi: candidate.doi, title: candidate.title },
-    steps: planSteps(candidate, settings),
-  };
-  // Progress is written one state at a time, in order, however many routes
-  // report at once.
-  let writes = Promise.resolve();
-  const publish = () => {
-    const snapshot = structuredClone(job);
-    writes = writes.then(() => chrome.storage.session.set({ [JOB_KEY]: snapshot })).catch(() => {});
-    return writes;
-  };
+  job.candidate = { doi: candidate.doi, title: candidate.title };
+  job.steps = planSteps(candidate, settings);
+  const publish = () => publishJob(job);
   await publish();
 
   // The open-access copy is the last resort: it is often an earlier version of
@@ -736,6 +767,7 @@ async function runJob(candidate) {
 // One paper per click is how this is meant to be used, and library licences
 // forbid systematic downloading. So there is a ceiling no reader collecting
 // papers by hand comes near, and no way to queue, schedule or loop downloads.
+// Papers still on their way count towards it.
 const PACE = { papers: 30, minutes: 60 };
 const PACE_KEY = "savedAt"; // when each of the last papers was saved
 
@@ -746,12 +778,15 @@ async function recentSaves() {
 }
 
 // Null when another paper may be fetched now, otherwise why not and until when.
-async function paceLimit() {
+// `underway` is how many other papers are being fetched at this moment.
+async function paceLimit(underway = 0) {
   const recent = await recentSaves();
-  if (recent.length < PACE.papers) return null;
+  if (recent.length + underway < PACE.papers) return null;
+  const limit = `${PACE.papers} papers an hour is the limit, to stay within library licences.`;
+  if (recent.length < PACE.papers) return `${limit} The ones on their way now count; try again when one is done.`;
   const free = new Date(recent[recent.length - PACE.papers] + PACE.minutes * 60000);
   const at = free.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `${PACE.papers} papers an hour is the limit, to stay within library licences. Next one at ${at}.`;
+  return `${limit} Next one at ${at}.`;
 }
 
 // Also remembered, until the browser is closed: which papers were saved, so
@@ -764,14 +799,41 @@ async function noteSave(doi) {
   await chrome.storage.session.set({ [SAVED_KEY]: [...dois, doi.toLowerCase()].slice(-200) });
 }
 
+// Starts fetching a paper and answers as soon as the job exists; the popup
+// hears the rest through storage. The same paper is not fetched twice at once.
 async function startDownload(candidate) {
   if (!candidate?.doi) return { error: "Nothing selected." };
-  if (running) return { error: "A download is already in progress." };
-  const limit = await paceLimit();
-  if (limit) return { error: limit };
-  // Checked again: another request can have come in while that was looked up.
-  if (running) return { error: "A download is already in progress." };
-  running = true;
+  const key = candidate.doi.toLowerCase();
+  if (inFlight.has(key)) return { error: "This paper is already downloading." };
+  // Its place is taken at once: the check below takes a moment, and a second
+  // request for the same paper may arrive meanwhile.
+  inFlight.set(key, null);
+  let job;
+  try {
+    const limit = await paceLimit(inFlight.size - 1);
+    if (limit) {
+      inFlight.delete(key);
+      return { error: limit };
+    }
+    jobCount += 1;
+    job = {
+      id: `${Date.now()}-${jobCount}`,
+      status: "running",
+      startedAt: Date.now(),
+      candidate: { doi: candidate.doi, title: candidate.title || candidate.doi },
+      steps: [],
+    };
+    inFlight.set(key, job.id);
+    await publishJob(job);
+  } catch (error) {
+    inFlight.delete(key);
+    throw error;
+  }
+  fetchPaper(job, candidate).finally(() => inFlight.delete(key));
+  return { id: job.id };
+}
+
+async function fetchPaper(job, candidate) {
   // Chrome shuts an extension's background worker down after 30 seconds without
   // extension activity, and waiting on a slow server is not activity. A job cut
   // off that way would stay "downloading" for good.
@@ -783,32 +845,33 @@ async function startDownload(candidate) {
       const record = await crossrefByDoi(candidate.doi).catch(() => null);
       if (record) candidate = { ...candidate, ...record };
     }
-    const job = await runJob(candidate);
+    await runJob(job, candidate);
     if (job.status === "done") await noteSave(candidate.doi);
-    return { job };
+  } catch (error) {
+    // Nothing above is expected to throw; if it does, the job must not be left
+    // looking as if it were still running.
+    job.status = "failed";
+    job.finishedAt = Date.now();
+    job.steps = [{ key: "error", label: "Callslip", state: "failed", detail: error?.message || String(error), action: null }];
+    await publishJob(job);
   } finally {
     clearInterval(awake);
-    running = false;
   }
 }
 
-// A job still marked "running" when this worker starts belongs to a worker that
-// was shut down mid-download; nothing is going to finish it.
-async function sweepStaleJob() {
-  const job = await readJob();
-  if (!job || job.status !== "running" || running) return;
-  for (const step of job.steps) {
-    if (step.state === "running") {
-      step.state = "failed";
-      step.detail = "interrupted";
-    }
-  }
-  job.status = "failed";
-  job.finishedAt = Date.now();
-  await chrome.storage.session.set({ [JOB_KEY]: job });
+// Jobs still marked "running" when this worker starts belong to a worker that
+// was shut down mid-download; nothing is going to finish them.
+function sweepStaleJobs() {
+  return changeJobs((jobs) =>
+    jobs.map((job) => {
+      if (job.status !== "running" || inFlight.has(job.candidate.doi.toLowerCase())) return job;
+      const steps = job.steps.map((step) => (step.state === "running" ? { ...step, state: "failed", detail: "interrupted" } : step));
+      return { ...job, steps, status: "failed", finishedAt: Date.now() };
+    }),
+  ).catch(() => {});
 }
 
-sweepStaleJob();
+sweepStaleJobs();
 
 // ---------------------------------------------------------------- messages
 
@@ -820,6 +883,8 @@ const HANDLERS = {
     return { candidates };
   },
   download: (message) => startDownload(message.candidate),
+  "jobs:dismiss": async (message) => ({ jobs: await dismissJobs({ id: message.id }) }),
+  "jobs:clear": async (message) => ({ jobs: await dismissJobs({ keep: message.keep || [] }) }),
   "settings:get": async () => ({ settings: await getSettings() }),
   "settings:set": async (message) => ({ settings: await setSettings(message.settings || {}) }),
 };

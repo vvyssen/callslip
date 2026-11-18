@@ -53,7 +53,8 @@ const state = {
   selected: -1,
   searchedKey: null, // the form contents the current list belongs to
   searching: false,
-  starting: false, // download requested, first progress not in yet
+  starting: new Set(), // DOIs of downloads just asked for, until their jobs show up
+  jobs: [], // downloads under way and recently finished, newest first
   job: null,
   note: "", // one-off message for the action bar
   savedDois: [], // papers saved since the browser was opened
@@ -162,7 +163,7 @@ async function readPage() {
 async function followPage() {
   for (let round = 0; round < 30 && state.page?.loading && !state.page.doi; round += 1) {
     await sleep(1000);
-    if (state.touched || jobActive()) return;
+    if (state.touched || state.starting.size) return;
     let tab;
     try {
       tab = await chrome.tabs.get(state.page.tabId);
@@ -171,7 +172,7 @@ async function followPage() {
     }
     if (tab.url !== state.page.url) return;
     const next = describePage(tab, await scanTab(tab.id));
-    if (state.touched || jobActive()) return;
+    if (state.touched || state.starting.size) return;
     const grew = next.items.length > state.page.items.length;
     if (!next.doi && !grew) {
       state.page.loading = next.loading;
@@ -353,9 +354,10 @@ function showPageList(items) {
   state.fromPage = true;
   state.heading = `${items.length} papers on this page`;
   state.searchedKey = queryKey(formQuery());
-  // An earlier download's result stays only if it is one of these papers.
-  const finished = state.job && state.job.status !== "running" ? state.job.candidate.doi : null;
-  if (finished && !items.some((item) => sameDoi(item.doi, finished))) chrome.storage.session.remove("job");
+  // Earlier downloads' results stay only for papers that are on this list.
+  if (state.jobs.some((job) => job.status !== "running" && !items.some((item) => sameDoi(item.doi, job.candidate.doi)))) {
+    send({ type: "jobs:clear", keep: items.map((item) => item.doi) }).catch(() => {});
+  }
   setNotice("");
   renderMatches();
   select(Math.max(0, state.candidates.findIndex((candidate) => sameDoi(candidate.doi, chosen))));
@@ -375,7 +377,7 @@ async function showPagePaper() {
     $("title").value = "";
     fitTitle();
     setNotice(GUIDE);
-  } else if ($("auto").checked && !others.length && sameDoi(only.doi, state.page.doi) && !state.touched && !jobActive()) {
+  } else if ($("auto").checked && !others.length && sameDoi(only.doi, state.page.doi) && !state.touched && !onItsWay(only.doi)) {
     // Saved already: looking at the page again must not fetch a second copy.
     if (state.savedDois.includes(only.doi.toLowerCase())) state.note = "Already saved. Press Enter for another copy.";
     else download();
@@ -385,16 +387,24 @@ async function showPagePaper() {
 
 // --------------------------------------------------------------- download
 
-const jobActive = () => state.starting || state.job?.status === "running";
+// The newest job for a paper, and whether that paper is being fetched now.
+const jobFor = (doi) => state.jobs.find((job) => sameDoi(job.candidate.doi, doi)) || null;
+const onItsWay = (doi) =>
+  [...state.starting].some((asked) => sameDoi(asked, doi)) || jobFor(doi)?.status === "running";
 
-function renderJob() {
-  const box = $("job");
-  const job = state.job;
-  box.textContent = "";
-  box.hidden = !job;
-  if (!job) return;
-  box.className = `job ${job.status}`;
+// Where a running job has got to, in a few words.
+function progressLine(job) {
+  const active = job.steps.filter((step) => step.state === "running");
+  if (!active.length) return "Starting";
+  const [first] = active;
+  if (active.length === 1) return first.detail ? `${first.label}: ${first.detail}` : first.label;
+  return active.map((step) => step.label).join(", ");
+}
 
+// One download. `full` lists every route with what it ran into; otherwise a
+// running or failed job is told in one line, so several fit in the popup.
+function jobCard(job, full) {
+  const card = el("div", `job ${job.status}`);
   const head = el("div", "job-head");
   head.append(
     el(
@@ -409,12 +419,12 @@ function renderJob() {
     close.title = "Dismiss";
     close.setAttribute("aria-label", "Dismiss");
     close.innerHTML = CLOSE;
-    close.addEventListener("click", () => chrome.storage.session.remove("job"));
+    close.addEventListener("click", () => send({ type: "jobs:dismiss", id: job.id }).catch(() => {}));
     head.append(close);
   }
   const title = el("div", "job-title", job.candidate.title);
   title.title = job.candidate.title;
-  box.append(head, title);
+  card.append(head, title);
 
   if (job.status === "done") {
     const saved = el("div", "saved");
@@ -429,11 +439,35 @@ function renderJob() {
     show.type = "button";
     show.addEventListener("click", () => chrome.downloads.show(job.downloadId));
     saved.append(file, show);
-    box.append(saved);
-    return;
+    card.append(saved);
+    return card;
+  }
+
+  const byHand = () => {
+    const open = el("button", "btn", job.fallback.label);
+    open.type = "button";
+    open.addEventListener("click", () => chrome.tabs.create({ url: job.fallback.url }));
+    return open;
+  };
+  const hasFallback = job.status === "failed" && /^https:\/\//.test(job.fallback?.url || "");
+
+  if (!full) {
+    const line = el("div", "job-line");
+    if (job.status === "running") line.append(el("span", "spinner"), el("span", "job-line-text", progressLine(job)));
+    else line.append(el("span", "job-line-text", "No route worked."));
+    if (hasFallback) line.append(byHand());
+    card.append(line);
+    return card;
   }
 
   const steps = el("ul", "steps");
+  if (!job.steps.length) {
+    const row = el("li", "step running");
+    const mark = el("span", "step-mark");
+    mark.innerHTML = MARKS.running || MARKS.pending;
+    row.append(mark, el("span", "step-name", "Starting"));
+    steps.append(row);
+  }
   for (const step of job.steps) {
     const row = el("li", `step ${step.state}`);
     const mark = el("span", "step-mark");
@@ -450,16 +484,26 @@ function renderJob() {
     }
     steps.append(row);
   }
-  box.append(steps);
+  card.append(steps);
 
-  if (job.status === "failed" && /^https:\/\//.test(job.fallback?.url || "")) {
+  if (hasFallback) {
     const fallback = el("div", "job-fallback");
-    const open = el("button", "btn", job.fallback.label);
-    open.type = "button";
-    open.addEventListener("click", () => chrome.tabs.create({ url: job.fallback.url }));
-    fallback.append(el("span", "", "Get it by hand:"), open);
-    box.append(fallback);
+    fallback.append(el("span", "", "Get it by hand:"), byHand());
+    card.append(fallback);
   }
+  return card;
+}
+
+// Every route is spelled out when there is one download to show, and for the
+// newest one when it failed; the others take a line each.
+function renderJob() {
+  const box = $("job");
+  box.textContent = "";
+  box.hidden = !state.jobs.length;
+  state.jobs.forEach((job, index) => {
+    const full = state.jobs.length === 1 || (index === 0 && job.status === "failed");
+    box.append(jobCard(job, full));
+  });
 }
 
 function renderFoot() {
@@ -468,10 +512,11 @@ function renderFoot() {
   if (!visible) return;
 
   const button = $("download");
-  const active = jobActive();
-  const retry =
-    state.job?.status === "failed" &&
-    sameDoi(state.job.candidate.doi, state.candidates[state.selected]?.doi);
+  // Only the paper that is selected matters here: another one being fetched
+  // does not stop this one from being asked for.
+  const chosen = state.candidates[state.selected]?.doi;
+  const active = Boolean(chosen) && onItsWay(chosen);
+  const retry = Boolean(chosen) && jobFor(chosen)?.status === "failed";
   button.disabled = active || state.selected < 0;
   button.textContent = "";
   if (active) button.append(el("span", "spinner"));
@@ -494,18 +539,18 @@ function renderFoot() {
 
 async function download() {
   const candidate = state.candidates[state.selected];
-  if (!candidate || jobActive()) return;
-  state.starting = true;
+  if (!candidate || onItsWay(candidate.doi)) return;
+  state.starting.add(candidate.doi);
   state.note = "";
   renderFoot();
   let response;
   try {
-    // Resolves when the download ends; progress arrives through storage.
+    // Answers once the job exists; its progress arrives through storage.
     response = await send({ type: "download", candidate });
   } catch (error) {
     response = { error: error.message };
   }
-  state.starting = false;
+  state.starting.delete(candidate.doi);
   if (response?.error) state.note = response.error;
   renderFoot();
 }
@@ -550,7 +595,9 @@ async function runSearch({ auto = true } = {}) {
     return;
   }
   resetList();
-  if (state.job && state.job.status !== "running") chrome.storage.session.remove("job");
+  // A new search clears away the downloads that have finished; any still
+  // running stay on screen.
+  if (state.jobs.some((job) => job.status !== "running")) send({ type: "jobs:clear" }).catch(() => {});
   setSearching(true);
   setNotice("Searching Crossref…", "loading");
   try {
@@ -679,8 +726,8 @@ function bindEvents() {
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "session" || !changes.job) return;
-    state.job = changes.job.newValue || null;
+    if (area !== "session" || !changes.jobs) return;
+    state.jobs = changes.jobs.newValue || [];
     renderJob();
     renderFoot();
   });
@@ -705,7 +752,7 @@ async function init() {
 
   const [response, session, page] = await Promise.all([
     send({ type: "settings:get" }),
-    chrome.storage.session.get(["lastSearch", "selectedDoi", "job", "savedDois"]),
+    chrome.storage.session.get(["lastSearch", "selectedDoi", "jobs", "savedDois"]),
     readPage(),
   ]);
   if (response?.settings) state.settings = { ...state.settings, ...response.settings };
@@ -714,7 +761,7 @@ async function init() {
   setNotice(GUIDE); // again, now that we know whether a library is set up
   offerProxy();
 
-  state.job = session.job || null;
+  state.jobs = session.jobs || [];
   state.savedDois = session.savedDois || [];
   renderJob();
 
