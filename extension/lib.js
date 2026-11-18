@@ -151,10 +151,9 @@ async function crossrefGet(url) {
   throw lastError;
 }
 
-export async function crossrefSearch({ title, author, year, rows = 10 }) {
-  const query = [title, author, year].filter(Boolean).join(" ");
+async function crossrefWorks(params, rows) {
   const url = new URL("https://api.crossref.org/works");
-  url.searchParams.set("query.bibliographic", query);
+  for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
   url.searchParams.set("rows", String(rows));
   url.searchParams.set(
     "select",
@@ -164,6 +163,24 @@ export async function crossrefSearch({ title, author, year, rows = 10 }) {
   return (payload?.message?.items || [])
     .map(toCandidate)
     .filter((candidate) => candidate.doi && candidate.title);
+}
+
+// Crossref's title field is asked first. Its whole-reference search ranks a
+// short title ("Bargaining Chains") below longer titles that merely contain
+// those words, so the paper itself can be missing from the first page while a
+// working-paper version of it comes out on top. The whole-reference search is
+// kept for when the title field finds nothing close, which is what happens
+// when something other than a title was pasted.
+export async function crossrefSearch({ title, author, year, rows = 10 }) {
+  const byTitle = await crossrefWorks(
+    { "query.title": title, ...(author ? { "query.author": author } : {}) },
+    rows,
+  );
+  if (byTitle.some((candidate) => titleSimilarity(title, candidate.title) >= 0.5)) return byTitle;
+  const reference = [title, author, year].filter(Boolean).join(" ");
+  const byReference = await crossrefWorks({ "query.bibliographic": reference }, rows * 2);
+  const seen = new Set(byTitle.map((candidate) => candidate.doi.toLowerCase()));
+  return [...byTitle, ...byReference.filter((candidate) => !seen.has(candidate.doi.toLowerCase()))];
 }
 
 export async function crossrefByDoi(doi) {
@@ -405,19 +422,30 @@ export function downloadPath(candidate, subfolder) {
 // Open-access copies of a DOI, from OpenAlex: direct PDF links, best first, and
 // the open-access article page for when no location has a direct link. OpenAlex
 // often lists only the page for its "best" location while a repository further
-// down the list has the file.
+// down the list has the file. `unreachable` is set when OpenAlex could not be
+// asked at all, which is not the same as there being no free copy.
 export async function openAccess(doi) {
-  let work;
-  try {
-    const response = await fetch(
-      `https://api.openalex.org/works/https://doi.org/${encodeURIComponent(doi)}`,
-      { headers: { Accept: "application/json" } },
-    );
-    if (!response.ok) return { pdfs: [], page: null };
-    work = await response.json();
-  } catch {
-    return { pdfs: [], page: null };
+  const address =
+    `https://api.openalex.org/works/https://doi.org/${encodeURIComponent(doi)}` +
+    "?select=open_access,best_oa_location,locations";
+  let work = null;
+  let unreachable = false;
+  for (let attempt = 0; attempt < 3 && !work; attempt += 1) {
+    if (attempt) await sleep(1200 * attempt);
+    unreachable = true;
+    try {
+      const response = await fetch(address, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (response.ok) work = await response.json();
+      // Shared addresses run into its rate limit (429) quite often; a moment
+      // later the same request goes through. A 404 means it has no such work.
+      else if (response.status !== 429 && response.status < 500) unreachable = false;
+      if (!unreachable) break;
+    } catch {}
   }
+  if (!work) return { pdfs: [], page: null, unreachable };
   const locations = [work.best_oa_location, ...(work.locations || [])].filter(
     (location) => location && location.is_oa !== false,
   );
@@ -426,5 +454,5 @@ export async function openAccess(doi) {
     work.open_access?.oa_url ||
     locations.map((location) => location.landing_page_url).find(Boolean) ||
     null;
-  return { pdfs, page: pdfs.includes(page) ? null : page };
+  return { pdfs, page: pdfs.includes(page) ? null : page, unreachable: false };
 }

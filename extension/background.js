@@ -35,6 +35,60 @@ class StepError extends Error {
   }
 }
 
+// Thrown inside a route that was stopped because another one got there first.
+class Stopped extends Error {}
+
+// ------------------------------------------------------------------- races
+//
+// The routes to a paper run side by side. The first one whose answer is a PDF
+// claims the download, and that stops the others on the spot: their downloads
+// are cancelled before any of the file has been saved, and EBSCO's tab is
+// closed. So a slow or refusing route no longer holds up a working one.
+function createRace() {
+  let winner = null;
+  const stops = new Map(); // route key -> how to stop it
+  return {
+    get winner() {
+      return winner;
+    },
+    // True for the first route to call it; false for every route after that.
+    claim(key) {
+      if (winner !== null) return winner === key;
+      winner = key;
+      for (const [other, stop] of stops) {
+        if (other !== key) stop();
+      }
+      return true;
+    },
+    onStop(key, stop) {
+      stops.set(key, stop);
+      if (winner !== null && winner !== key) stop();
+    },
+  };
+}
+
+// Lets a route drop whatever it is waiting for the moment it is stopped:
+// `until(x)` is `x`, except that it throws Stopped as soon as stop() is called.
+function stopper() {
+  let trip = null;
+  let stopped = false;
+  const halted = new Promise((resolve, reject) => {
+    trip = reject;
+  });
+  halted.catch(() => {});
+  return {
+    get stopped() {
+      return stopped;
+    },
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      trip(new Stopped());
+    },
+    until: (promise) => Promise.race([promise, halted]),
+  };
+}
+
 // ---------------------------------------------------------------- settings
 
 async function getSettings() {
@@ -82,6 +136,7 @@ const INTERRUPT_REASONS = {
   SERVER_BAD_CONTENT: "not found (404)",
   SERVER_FAILED: "server error",
   SERVER_UNREACHABLE: "server unreachable",
+  SERVER_CONTENT_LENGTH_MISMATCH: "download cut off",
   NETWORK_FAILED: "network error",
   NETWORK_TIMEOUT: "network timeout",
   NETWORK_DISCONNECTED: "network disconnected",
@@ -113,7 +168,26 @@ function rejectReason(item) {
   return item.fileSize >= 20000 ? null : "not a PDF";
 }
 
+// What the start of a response says about it: null while nothing has arrived,
+// { pdf: true } when it may be the paper, { reason } when it cannot be. A web
+// page is recognised from its first bytes, so a paywall or a sign-in page is
+// turned down at once instead of being downloaded first.
+function firstLook(item) {
+  const mime = (item.mime || "").toLowerCase();
+  if (mime.includes("pdf")) return { pdf: true };
+  if (/html|^text\/|json|xml/.test(mime)) {
+    const signIn = looksLikeSignIn(item.finalUrl || item.url);
+    return { reason: signIn ? "sign-in required" : "got a web page, not a PDF" };
+  }
+  if (!mime && !item.filename && !item.bytesReceived && item.state === "in_progress") return null;
+  return { pdf: true }; // a type that says nothing: let it finish, then judge it
+}
+
+// Stops a download wherever it is and leaves nothing of it behind.
 async function discardDownload(id) {
+  try {
+    await chrome.downloads.cancel(id);
+  } catch {}
   try {
     await chrome.downloads.removeFile(id);
   } catch {}
@@ -123,69 +197,105 @@ async function discardDownload(id) {
 }
 
 // Waits for a download to end and returns it only if it is a PDF. Anything else
-// is deleted so no junk file is left behind.
-async function finishDownload(id, stallLimit = 45000) {
+// is deleted so no junk file is left behind. In a race, the download has to
+// claim the win as soon as it turns out to be a PDF, and gives way if another
+// route already has.
+async function finishDownload(id, { race = null, key = null, stopped = () => false, stallLimit = 45000 } = {}) {
   let lastBytes = -1;
   let lastProgress = Date.now();
+  let looked = false;
   while (Date.now() - lastProgress < stallLimit) {
+    if (stopped()) {
+      await discardDownload(id);
+      throw new Stopped();
+    }
     const [item] = await chrome.downloads.search({ id });
     if (!item) throw new StepError("download disappeared");
+    if (item.state === "interrupted") {
+      await discardDownload(id);
+      throw new StepError(INTERRUPT_REASONS[item.error] || `interrupted (${item.error || "unknown"})`);
+    }
+    if (!looked) {
+      const look = firstLook(item);
+      if (look?.reason) {
+        await discardDownload(id);
+        throw new StepError(look.reason);
+      }
+      if (look?.pdf) {
+        looked = true;
+        if (race && !race.claim(key)) {
+          await discardDownload(id);
+          throw new Stopped();
+        }
+      }
+    }
     if (item.state === "complete") {
       const reason = rejectReason(item);
       if (!reason) return item;
       await discardDownload(id);
       throw new StepError(reason);
     }
-    if (item.state === "interrupted") {
-      await discardDownload(id);
-      throw new StepError(INTERRUPT_REASONS[item.error] || `interrupted (${item.error || "unknown"})`);
-    }
     if (item.bytesReceived !== lastBytes) {
       lastBytes = item.bytesReceived;
       lastProgress = Date.now();
     }
-    await sleep(400);
+    await sleep(looked ? 400 : 150);
   }
-  try {
-    await chrome.downloads.cancel(id);
-  } catch {}
   await discardDownload(id);
   throw new StepError("timed out");
 }
 
+// How long a server gets to start answering. Generous, because the other
+// routes are not waiting for this one.
+const ANSWER_WAIT = 45000;
+const LATE = Symbol("late");
+
 // "uniquify", not "overwrite": a failed attempt must never replace (and then
 // take down with it) a good copy saved earlier under the same cite key.
-async function saveFrom(url, candidate, settings) {
+async function saveFrom(url, candidate, settings, race = null, key = null) {
+  const halt = stopper();
+  race?.onStop(key, halt.stop);
+  // downloads.download() answers once the server has, which can take a while.
+  const starting = chrome.downloads.download({
+    url,
+    filename: downloadPath(candidate, settings.subfolder),
+    conflictAction: "uniquify",
+    saveAs: false,
+  });
+  // Whenever a download we gave up on does start, it is no longer wanted.
+  const disown = () => starting.then(discardDownload, () => {});
   let id;
   try {
-    id = await chrome.downloads.download({
-      url,
-      filename: downloadPath(candidate, settings.subfolder),
-      conflictAction: "uniquify",
-      saveAs: false,
-    });
+    id = await halt.until(Promise.race([starting, sleep(ANSWER_WAIT).then(() => LATE)]));
   } catch (error) {
+    if (error instanceof Stopped) {
+      disown();
+      throw error;
+    }
     throw new StepError(error?.message || "download could not start");
   }
-  const item = await finishDownload(id);
+  if (id === LATE) {
+    disown();
+    throw new StepError("no answer from the server");
+  }
+  const item = await finishDownload(id, { race, key, stopped: () => halt.stopped });
   return { downloadId: id, filename: item.filename };
 }
 
-// The PDF link of the article page the popup was opened on. It carries
-// whatever access that page has: campus network, proxy session, or a login.
-async function viaPage(candidate, settings) {
-  return saveFrom(candidate.pagePdf, candidate, settings);
+async function viaPage(candidate, settings, note, race) {
+  return saveFrom(candidate.pagePdf, candidate, settings, race, "page");
 }
 
-async function viaPublisher(candidate, settings) {
-  return saveFrom(publisherPdfUrl(candidate.doi), candidate, settings);
+async function viaPublisher(candidate, settings, note, race) {
+  return saveFrom(publisherPdfUrl(candidate.doi), candidate, settings, race, "publisher");
 }
 
-async function viaProxy(candidate, settings) {
+async function viaProxy(candidate, settings, note, race) {
   const url = proxied(settings.proxy, publisherPdfUrl(candidate.doi));
   try {
-    return await saveFrom(url, candidate, settings);
+    return await saveFrom(url, candidate, settings, race, "proxy");
   } catch (error) {
+    if (error instanceof Stopped) throw error;
     // Whatever went wrong, the same link opened in a tab shows it: the sign-in
     // form, or the publisher's page as the library sees it.
     const label = error.message === "sign-in required" ? "Sign in" : "Open";
@@ -193,9 +303,12 @@ async function viaProxy(candidate, settings) {
   }
 }
 
-async function viaOpenAccess(candidate, settings) {
-  const { pdfs, page } = await openAccess(candidate.doi);
+// `lookup` is the OpenAlex answer, asked for when the job started so that it is
+// already there by the time the library routes have all failed.
+async function viaOpenAccess(candidate, settings, note, race, lookup) {
+  const { pdfs, page, unreachable } = await (lookup || openAccess(candidate.doi));
   const openPage = page ? { label: "Open page", url: page } : null;
+  if (unreachable) throw new StepError("couldn't reach OpenAlex");
   if (!pdfs.length) {
     throw new StepError(page ? "free to read, but no direct PDF link" : "no free copy found", openPage);
   }
@@ -314,6 +427,13 @@ function pageResultLinks() {
     .map((anchor) => ({ title: (anchor.innerText || "").trim(), href: anchor.href }));
 }
 
+// True once the page says the search came back empty, so an unknown DOI does
+// not have to be waited out.
+function pageNoResults() {
+  const text = document.body?.innerText || "";
+  return /\b0 (total )?results\b|\bno results\b|couldn.t find any results|did not match any/i.test(text);
+}
+
 function pageHasFullText() {
   return /PDF Full Text/i.test(document.body?.innerText || "");
 }
@@ -351,7 +471,12 @@ async function ebscoSearch(tabId, query, timeout = 30000) {
     if (links.length) return links;
     const tab = await chrome.tabs.get(tabId);
     if (EBSCO_LOGIN.test(tab.url || "")) throw ebscoSignIn();
-    await sleep(600);
+    let empty = false;
+    try {
+      empty = /\/search\/results/.test(tab.url || "") && (await inTab(tabId, pageNoResults));
+    } catch {}
+    if (empty) return [];
+    await sleep(500);
   }
   return [];
 }
@@ -371,6 +496,8 @@ function claimNextDownload(filename, timeout = 60000) {
   started.catch(() => {});
   const claim = (item) => {
     if (claimed !== null) return;
+    // Downloads this extension starts itself belong to the other routes.
+    if (item.byExtensionId === chrome.runtime.id) return;
     const startTime = item.startTime ? Date.parse(item.startTime) : Date.now();
     if (startTime < armedAt - 1000) return;
     claimed = item.id;
@@ -394,35 +521,44 @@ function claimNextDownload(filename, timeout = 60000) {
   };
 }
 
-async function viaEbsco(candidate, settings, note) {
-  let code = settings.ebscoCustomer;
-  if (!code) {
-    note("finding your library");
-    code = await detectEbscoCode();
-    if (!code) throw ebscoSignIn();
-    await setSettings({ ebscoCustomer: code });
-  }
-  const searchUrl = `https://research.ebsco.com/c/${code}/search/advanced`;
-  note("opening search");
-  const tab = await chrome.tabs.create({ url: searchUrl, active: false });
+async function viaEbsco(candidate, settings, note, race) {
+  const halt = stopper();
+  const { until } = halt;
+  let tabId = null;
+  race?.onStop("ebsco", () => {
+    halt.stop();
+    if (tabId !== null) chrome.tabs.remove(tabId).catch(() => {});
+  });
   let claim = null;
   try {
-    const loaded = await waitForTabLoad(tab.id);
+    let code = settings.ebscoCustomer;
+    if (!code) {
+      note("finding your library");
+      code = await until(detectEbscoCode());
+      if (!code) throw ebscoSignIn();
+      await setSettings({ ebscoCustomer: code });
+    }
+    const searchUrl = `https://research.ebsco.com/c/${code}/search/advanced`;
+    note("opening search");
+    // Not wrapped in until(): the tab has to be known here to be closed again.
+    const tab = await chrome.tabs.create({ url: searchUrl, active: false });
+    tabId = tab.id;
+    const loaded = await until(waitForTabLoad(tab.id));
     if (EBSCO_LOGIN.test(loaded.url || "")) throw ebscoSignIn();
-    if (!(await waitInTab(tab.id, pageHasSelector, ["#search-autocomplete-1-input"]))) {
-      const current = await chrome.tabs.get(tab.id);
+    if (!(await until(waitInTab(tab.id, pageHasSelector, ["#search-autocomplete-1-input"])))) {
+      const current = await until(chrome.tabs.get(tab.id));
       if (!(current.url || "").startsWith("https://research.ebsco.com/c/")) throw ebscoSignIn();
       throw new StepError("search page did not load");
     }
 
     note("searching");
-    let links = candidate.doi ? await ebscoSearch(tab.id, candidate.doi, 15000) : [];
+    let links = candidate.doi ? await until(ebscoSearch(tab.id, candidate.doi, 15000)) : [];
     if (!links.length && candidate.title) {
-      await navigate(tab.id, searchUrl);
-      if (!(await waitInTab(tab.id, pageHasSelector, ["#search-autocomplete-1-input"]))) {
+      await until(navigate(tab.id, searchUrl));
+      if (!(await until(waitInTab(tab.id, pageHasSelector, ["#search-autocomplete-1-input"])))) {
         throw new StepError("search page did not load");
       }
-      links = await ebscoSearch(tab.id, candidate.title);
+      links = await until(ebscoSearch(tab.id, candidate.title));
     }
     if (!links.length) throw new StepError("not in EBSCO");
     const best = links
@@ -431,30 +567,37 @@ async function viaEbsco(candidate, settings, note) {
     if (best.similarity < 0.5) throw new StepError("no matching record");
 
     note("opening record");
-    await navigate(tab.id, best.href);
-    if (!(await waitInTab(tab.id, pageHasFullText, [], 10000, 500))) {
+    await until(navigate(tab.id, best.href));
+    if (!(await until(waitInTab(tab.id, pageHasFullText, [], 10000, 500)))) {
       throw new StepError("no PDF full text for this record");
     }
 
     note("downloading");
+    if (halt.stopped) throw new Stopped();
     claim = claimNextDownload(downloadPath(candidate, settings.subfolder));
-    if (!(await inTab(tab.id, pageClickButton, ["Download", false]))) {
+    if (!(await until(inTab(tab.id, pageClickButton, ["Download", false])))) {
       throw new StepError("download button not found");
     }
-    if (!(await waitInTab(tab.id, pageChoosePdf, [], 4000, 300))) {
+    if (!(await until(waitInTab(tab.id, pageChoosePdf, [], 4000, 300)))) {
       throw new StepError("no PDF option in the download dialog");
     }
-    if (!(await inTab(tab.id, pageClickButton, ["Download", true]))) {
+    if (!(await until(inTab(tab.id, pageClickButton, ["Download", true])))) {
       throw new StepError("download button not found");
     }
-    const id = await claim.started;
-    const item = await finishDownload(id);
+    const id = await until(claim.started);
+    const item = await finishDownload(id, { race, key: "ebsco", stopped: () => halt.stopped });
     return { downloadId: id, filename: item.filename };
+  } catch (error) {
+    // Its tab was closed under it: whatever that broke is not worth reporting.
+    if (halt.stopped) throw new Stopped();
+    throw error;
   } finally {
     if (claim) claim.release();
-    try {
-      await chrome.tabs.remove(tab.id);
-    } catch {}
+    if (tabId !== null) {
+      try {
+        await chrome.tabs.remove(tabId);
+      } catch {}
+    }
   }
 }
 
@@ -469,12 +612,24 @@ async function readJob() {
   return (await chrome.storage.session.get(JOB_KEY))[JOB_KEY] || null;
 }
 
+function sameAddress(a, b) {
+  try {
+    return new URL(a).href === new URL(b).href;
+  } catch {
+    return false;
+  }
+}
+
 function planSteps(candidate, settings) {
   const publisher = publisherOf(candidate.doi);
   const skip = (detail) => ({ state: "skipped", detail });
-  const fromPage = /^https?:\/\//i.test(candidate.pagePdf || "")
-    ? [{ key: "page", label: "This page", state: "pending" }]
-    : [];
+  // On the publisher's own site the page's PDF link is the publisher route:
+  // asking for the same address twice would only cost time.
+  const fromPage =
+    /^https?:\/\//i.test(candidate.pagePdf || "") &&
+    !(publisher && sameAddress(candidate.pagePdf, publisherPdfUrl(candidate.doi)))
+      ? [{ key: "page", label: "This page", state: "pending" }]
+      : [];
   return [
     ...fromPage,
     {
@@ -504,6 +659,75 @@ const RUNNERS = {
   oa: viaOpenAccess,
 };
 
+// EBSCO takes a browser tab and a search of its own, so the plain links get
+// this much of a head start: when one of them answers with the PDF straight
+// away, EBSCO is never opened. If they have all failed sooner, it starts sooner.
+const EBSCO_HEAD_START = 2000;
+
+// Runs the given routes side by side. Returns the one that delivered, if any,
+// and the ones that were stopped for a winner: if that winner then fails
+// (a download cut off half-way), they are the ones still worth trying.
+async function raceRoutes(steps, candidate, settings, publish) {
+  const race = createRace();
+  const stopped = [];
+  let won = null;
+  const standDown = (step) => {
+    step.state = "skipped";
+    step.detail = "not needed";
+    step.action = null;
+    stopped.push(step);
+  };
+  const run = async (step) => {
+    step.state = "running";
+    step.detail = "";
+    step.action = null;
+    publish();
+    try {
+      const result = await RUNNERS[step.key](
+        candidate,
+        settings,
+        (text) => {
+          if (step.state !== "running") return;
+          step.detail = text;
+          publish();
+        },
+        race,
+      );
+      step.state = "done";
+      step.detail = "";
+      won = { step, result };
+    } catch (error) {
+      if (error instanceof Stopped) {
+        standDown(step);
+      } else {
+        step.state = "failed";
+        step.detail = error?.message || String(error);
+        step.action = error?.action || null;
+      }
+    }
+    publish();
+  };
+
+  const ebsco = steps.find((step) => step.key === "ebsco");
+  const links = steps.filter((step) => step !== ebsco).map(run);
+  const tasks = [...links];
+  if (ebsco) {
+    tasks.push(
+      (async () => {
+        if (links.length) await Promise.race([Promise.all(links), sleep(EBSCO_HEAD_START)]);
+        if (race.winner !== null) {
+          standDown(ebsco);
+          publish();
+          return;
+        }
+        await run(ebsco);
+      })(),
+    );
+  }
+  await Promise.all(tasks);
+  return { won, stopped };
+}
+
 async function runJob(candidate) {
   const settings = await getSettings();
   const job = {
@@ -513,43 +737,63 @@ async function runJob(candidate) {
     candidate: { doi: candidate.doi, title: candidate.title },
     steps: planSteps(candidate, settings),
   };
-  const publish = () => chrome.storage.session.set({ [JOB_KEY]: job });
+  // Progress is written one state at a time, in order, however many routes
+  // report at once.
+  let writes = Promise.resolve();
+  const publish = () => {
+    const snapshot = structuredClone(job);
+    writes = writes.then(() => chrome.storage.session.set({ [JOB_KEY]: snapshot })).catch(() => {});
+    return writes;
+  };
   await publish();
-  for (const step of job.steps) {
-    if (step.state === "skipped") continue;
-    step.state = "running";
-    await publish();
+
+  // The open-access copy is the last resort: it is often an earlier version of
+  // the paper, so it never competes with the routes to the published one. Only
+  // the lookup is done ahead of time.
+  const free = job.steps.find((step) => step.key === "oa");
+  const lookup = openAccess(candidate.doi).catch(() => ({ pdfs: [], page: null, unreachable: true }));
+
+  let won = null;
+  let waiting = job.steps.filter((step) => step.state === "pending" && step !== free);
+  while (waiting.length && !won) {
+    const round = await raceRoutes(waiting, candidate, settings, publish);
+    won = round.won;
+    waiting = round.stopped;
+  }
+  if (!won && free) {
+    free.state = "running";
+    publish();
     try {
-      const result = await RUNNERS[step.key](candidate, settings, (text) => {
-        step.detail = text;
-        publish();
-      });
-      step.state = "done";
-      step.detail = "";
-      Object.assign(job, {
-        status: "done",
-        provider: step.label,
-        downloadId: result.downloadId,
-        filename: (result.filename || "").split(/[\\/]/).pop(),
-        finishedAt: Date.now(),
-      });
-      await publish();
-      return job;
+      const result = await viaOpenAccess(candidate, settings, null, null, lookup);
+      free.state = "done";
+      won = { step: free, result };
     } catch (error) {
-      step.state = "failed";
-      step.detail = error?.message || String(error);
-      step.action = error?.action || null;
-      await publish();
+      free.state = "failed";
+      free.detail = error?.message || String(error);
+      free.action = error?.action || null;
     }
   }
-  job.status = "failed";
+
   job.finishedAt = Date.now();
-  // Every route failed: leave the reader one click from the article itself,
-  // through the library when there is one, so they can still get it by hand.
-  const article = `https://doi.org/${candidate.doi}`;
-  job.fallback = settings.proxy
-    ? { label: "Open through library", url: proxied(settings.proxy, article) }
-    : { label: "Open article page", url: article };
+  if (won) {
+    for (const step of job.steps) {
+      if (step.state === "pending") Object.assign(step, { state: "skipped", detail: "not needed" });
+    }
+    Object.assign(job, {
+      status: "done",
+      provider: won.step.label,
+      downloadId: won.result.downloadId,
+      filename: (won.result.filename || "").split(/[\\/]/).pop(),
+    });
+  } else {
+    job.status = "failed";
+    // Every route failed: leave the reader one click from the article itself,
+    // through the library when there is one, so they can still get it by hand.
+    const article = `https://doi.org/${candidate.doi}`;
+    job.fallback = settings.proxy
+      ? { label: "Open through library", url: proxied(settings.proxy, article) }
+      : { label: "Open article page", url: article };
+  }
   await publish();
   return job;
 }
@@ -558,6 +802,10 @@ async function startDownload(candidate) {
   if (!candidate?.doi) return { error: "Nothing selected." };
   if (running) return { error: "A download is already in progress." };
   running = true;
+  // Chrome shuts an extension's background worker down after 30 seconds without
+  // extension activity, and waiting on a slow server is not activity. A job cut
+  // off that way would stay "downloading" for good.
+  const awake = setInterval(() => chrome.runtime.getPlatformInfo().catch(() => {}), 20000);
   try {
     // A paper picked from a list on a web page comes with a title only; the
     // file name needs its author and year.
@@ -567,6 +815,7 @@ async function startDownload(candidate) {
     }
     return { job: await runJob(candidate) };
   } finally {
+    clearInterval(awake);
     running = false;
   }
 }

@@ -17,7 +17,7 @@ On an article in Management Science, Operations Research, M&SOM or any other INF
 
 It works for other papers too. Open it on another publisher's article page, or paste any title or DOI; the paper is looked up on Crossref and the matches are listed.
 
-It uses the access you already have, trying these routes in order and stopping at the first that returns a PDF:
+It uses the access you already have. The routes to the published paper are tried at the same time and the first that answers with a PDF is downloaded; open access is the fallback:
 • the PDF link of the page you are on
 • the publisher's site, if you are on campus or on the university VPN
 • your library's proxy (EZproxy), if you are signed in

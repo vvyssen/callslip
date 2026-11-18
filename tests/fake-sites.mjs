@@ -65,7 +65,7 @@ const PDF = Buffer.concat([Buffer.from("%PDF-1.4\n% paper-fetch test file\n"), B
 const page = (title, body, head = "") =>
   `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>${head}</head><body>${body}</body></html>`;
 
-function informsArticle(doi) {
+function informsArticle(doi, { stalled = false } = {}) {
   const paper = INFORMS.find((item) => item.doi === doi) || { doi, title: "Untitled" };
   const related = INFORMS.filter((item) => item.doi !== doi)
     .map((item) => `<li><a href="/doi/${item.doi}">${item.title}</a></li>`)
@@ -78,19 +78,28 @@ function informsArticle(doi) {
     // As on the real site: the first dc.Identifier is not the DOI.
     `<meta name="dc.Title" content="${paper.title}">
      <meta name="dc.Identifier" scheme="publisher-id" content="${doi.split("/")[1]}">
-     <meta name="dc.Identifier" scheme="doi" content="${doi}">`,
+     <meta name="dc.Identifier" scheme="doi" content="${doi}">${stalled ? STALLED_SCRIPT : ""}`,
   );
 }
 
-function informsIssue() {
+function informsIssue({ stalled = false } = {}) {
   const items = INFORMS.map(
     (item) => `<div class="issue-item">
       <h5 class="issue-item__title"><a href="/doi/${item.doi}">${item.title}</a></h5>
       <a href="/doi/abs/${item.doi}">Abstract</a> <a href="/doi/pdf/${item.doi}">PDF</a> <a href="/doi/epdf/${item.doi}">Full text PDF</a>
     </div>`,
-  ).join("");
-  return page("Management Science: Vol 66, No 1", `<h1>Management Science</h1>${items}`);
+  );
+  if (!stalled) return page("Management Science: Vol 66, No 1", `<h1>Management Science</h1>${items.join("")}`);
+  return page(
+    "Management Science: Vol 66, No 1",
+    `<h1>Management Science</h1>${items[0]}<!--more-->${items.slice(1).join("")}${STALLED_SCRIPT}`,
+  );
 }
+
+// What a slow connection does to a real article page: the tags in <head> are
+// there at once, then a script the page waits for holds everything else up, so
+// the page stays "loading" long after it has shown its title.
+const STALLED_SCRIPT = '<script src="/stalled.js"></script>';
 
 export async function startFakeSites({ dir, port, ebscoTitle }) {
   execFileSync("openssl", [
@@ -98,6 +107,11 @@ export async function startFakeSites({ dir, port, ebscoTitle }) {
     "-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem"),
   ], { stdio: "ignore" });
   const hits = [];
+  // Set by a test to make one host's PDF link behave differently for a while:
+  //   delay  wait this long before answering
+  //   pdf    serve the PDF where a paywall page would be
+  //   cut    start sending a PDF, then drop the connection
+  const behave = {};
 
   const server = https.createServer(
     { key: readFileSync(join(dir, "key.pem")), cert: readFileSync(join(dir, "cert.pem")) },
@@ -121,12 +135,33 @@ export async function startFakeSites({ dir, port, ebscoTitle }) {
         res.end();
       };
       const paywall = () => send(page("Access options", "<h1>Get access</h1><p>Log in via your institution.</p>"));
+      // A script that never arrives within the test.
+      if (path === "/stalled.js") return void setTimeout(() => send("", "text/javascript"), 60000);
+      const rule = behave[host];
+      if (rule && path.startsWith("/doi/pdf/")) {
+        return void setTimeout(() => {
+          if (rule.cut) {
+            res.writeHead(200, { "Content-Type": "application/pdf", "Content-Length": PDF.length });
+            res.write(PDF.subarray(0, 2000));
+            return void setTimeout(() => res.destroy(), 300);
+          }
+          return rule.pdf ? pdf("direct.pdf") : paywall();
+        }, rule.delay || 0);
+      }
       // What INFORMS serves, whichever host it is reached on.
       const informs = (pdfAllowed) => {
-        if (path.startsWith("/toc/")) return send(informsIssue());
+        if (path.startsWith("/toc/")) {
+          if (!url.searchParams.has("slow")) return send(informsIssue());
+          // The list arrives in two parts with a pause between them, and the
+          // page never finishes loading.
+          const [first, rest] = informsIssue({ stalled: true }).split("<!--more-->");
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.write(first);
+          return void setTimeout(() => res.end(rest), 2500);
+        }
         if (path.startsWith("/doi/pdf/")) return pdfAllowed ? pdf("informs.pdf") : paywall();
         const doi = path.match(/10\.1287\/[^/]+$/);
-        return doi ? send(informsArticle(doi[0])) : paywall();
+        return doi ? send(informsArticle(doi[0], { stalled: url.searchParams.has("slow") })) : paywall();
       };
 
       if (host === "pubsonline.informs.org") return informs(false);
@@ -241,7 +276,11 @@ export async function startFakeSites({ dir, port, ebscoTitle }) {
   await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
   return {
     hits,
-    close: () => server.close(),
+    behave,
+    close: () => {
+      server.close();
+      server.closeAllConnections();
+    },
     // Sends every stand-in host to this server and everything else straight to
     // the network (a system proxy would look the names up itself).
     chromeArgs: [

@@ -1,4 +1,4 @@
-import { publisherOf, parseDoi, doiFromUrl, pdfNear, proxyFromUrl } from "./lib.js";
+import { publisherOf, parseDoi, doiFromUrl, pdfNear, proxyFromUrl, sleep } from "./lib.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -56,6 +56,8 @@ const state = {
   starting: false, // download requested, first progress not in yet
   job: null,
   note: "", // one-off message for the action bar
+  fromPage: false, // the list on screen is the papers the page links to
+  touched: false, // the person has typed or clicked something
 };
 
 // --------------------------------------------------------------- the page
@@ -101,6 +103,42 @@ function scanPage() {
   };
 }
 
+// How long the page gets to answer. On a slow connection an article page can
+// stay half-loaded for half a minute, and the popup must not sit waiting for it.
+const SCAN_WAIT = 1200;
+
+async function scanTab(tabId) {
+  try {
+    const injected = chrome.scripting.executeScript({
+      target: { tabId },
+      func: scanPage,
+      // Read whatever has arrived so far. Without this Chrome holds the script
+      // back until the page has finished loading.
+      injectImmediately: true,
+    });
+    injected.catch(() => {});
+    const results = await Promise.race([injected, sleep(SCAN_WAIT).then(() => null)]);
+    return results?.[0]?.result || null;
+  } catch {
+    // Chrome's PDF viewer and a few protected pages cannot be read; the
+    // address alone often still names the paper.
+    return null;
+  }
+}
+
+function describePage(tab, scan) {
+  const doi = scan?.doi || doiFromUrl(tab.url) || "";
+  return {
+    tabId: tab.id,
+    url: tab.url,
+    loading: tab.status !== "complete",
+    doi,
+    pdf: /^https?:\/\//i.test(scan?.pdf || "") ? scan.pdf : (doi && pdfNear(doi, tab.url)) || "",
+    items: scan?.items || [],
+    proxy: proxyFromUrl(tab.url),
+  };
+}
+
 async function readPage() {
   let tab;
   try {
@@ -114,22 +152,38 @@ async function readPage() {
     return null;
   }
   if (!/^https?:\/\//i.test(tab?.url || "")) return null;
-  let scan = null;
-  try {
-    const [injected] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: scanPage });
-    scan = injected?.result || null;
-  } catch {
-    // Chrome's PDF viewer and a few protected pages cannot be read; the
-    // address alone often still names the paper.
+  return describePage(tab, await scanTab(tab.id));
+}
+
+// A page that was still loading when the popup opened has more to show a
+// moment later: the article's tags, or the rest of a list. Keep reading it
+// until it is done, unless the person has started doing something else.
+async function followPage() {
+  for (let round = 0; round < 30 && state.page?.loading && !state.page.doi; round += 1) {
+    await sleep(1000);
+    if (state.touched || jobActive()) return;
+    let tab;
+    try {
+      tab = await chrome.tabs.get(state.page.tabId);
+    } catch {
+      return;
+    }
+    if (tab.url !== state.page.url) return;
+    const next = describePage(tab, await scanTab(tab.id));
+    if (state.touched || jobActive()) return;
+    const grew = next.items.length > state.page.items.length;
+    if (!next.doi && !grew) {
+      state.page.loading = next.loading;
+      continue;
+    }
+    if (!grew) next.items = state.page.items;
+    state.page = next;
+    if (next.doi) {
+      await showPagePaper();
+    } else if (next.items.length >= 2) {
+      showPageList(next.items);
+    }
   }
-  const doi = scan?.doi || doiFromUrl(tab.url) || "";
-  return {
-    url: tab.url,
-    doi,
-    pdf: /^https?:\/\//i.test(scan?.pdf || "") ? scan.pdf : (doi && pdfNear(doi, tab.url)) || "",
-    items: scan?.items || [],
-    proxy: proxyFromUrl(tab.url),
-  };
 }
 
 const sameDoi = (a, b) => Boolean(a) && Boolean(b) && a.toLowerCase() === b.toLowerCase();
@@ -293,7 +347,9 @@ function select(index, { keep = false } = {}) {
 // The papers a listing page links to, straight from the page. Their authors
 // and year are looked up when one is downloaded.
 function showPageList(items) {
+  const chosen = state.fromPage ? state.candidates[state.selected]?.doi : null;
   state.candidates = items.map((item) => ({ ...item, authors: [], families: [], year: null, journal: "", type: "" }));
+  state.fromPage = true;
   state.heading = `${items.length} papers on this page`;
   state.searchedKey = queryKey(formQuery());
   // An earlier download's result stays only if it is one of these papers.
@@ -301,7 +357,21 @@ function showPageList(items) {
   if (finished && !items.some((item) => sameDoi(item.doi, finished))) chrome.storage.session.remove("job");
   setNotice("");
   renderMatches();
-  select(0);
+  select(Math.max(0, state.candidates.findIndex((candidate) => sameDoi(candidate.doi, chosen))));
+}
+
+// Looks up the paper of the page the popup is on and shows it.
+async function showPagePaper() {
+  $("title").value = state.page.doi;
+  fitTitle();
+  await runSearch({ auto: false });
+  if (!state.candidates.length) {
+    // Not a paper Crossref knows: say nothing and start blank.
+    $("title").value = "";
+    fitTitle();
+    setNotice(GUIDE);
+  }
+  renderFoot();
 }
 
 // --------------------------------------------------------------- download
@@ -451,6 +521,7 @@ function setSearching(value) {
 
 function resetList() {
   state.candidates = [];
+  state.fromPage = false;
   state.heading = "";
   state.selected = -1;
   state.searchedKey = null;
@@ -522,6 +593,12 @@ function moveSelection(delta) {
 
 function bindEvents() {
   const title = $("title");
+
+  // Once the person has done anything, the popup stops updating itself from
+  // the page: what is on screen must not change under their hands.
+  for (const type of ["keydown", "pointerdown", "paste"]) {
+    document.addEventListener(type, () => (state.touched = true), true);
+  }
 
   $("form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -637,14 +714,7 @@ async function init() {
   const lastIsThisPage =
     last?.candidates.length === 1 && sameDoi(last.candidates[0].doi, page?.doi);
   if (page?.doi && !lastIsThisPage) {
-    $("title").value = page.doi;
-    fitTitle();
-    await runSearch({ auto: false });
-    if (!state.candidates.length) {
-      // Not a paper Crossref knows: say nothing and start blank.
-      $("title").value = "";
-      setNotice(GUIDE);
-    }
+    await showPagePaper();
   } else if (!page?.doi && page?.items.length >= 2) {
     showPageList(page.items);
   } else if (last) {
@@ -656,6 +726,7 @@ async function init() {
   $("title").focus();
   $("title").select();
   chrome.storage.local.remove("lastQuery"); // written by versions before 0.2
+  followPage();
 }
 
 init().catch((error) => setNotice(`Couldn't start: ${error.message}`, "error"));

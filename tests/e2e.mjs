@@ -70,7 +70,11 @@ const job = (page) => evaluate(page, "chrome.storage.session.get('job').then((da
 const stepOf = (result, name) => result.steps.find((step) => step.key === name);
 const routes = (result) => JSON.stringify(result.steps.map((step) => [step.key, step.state, step.detail]));
 const snap = (page, name, options) => (shots ? browser.shot(page, join(shots, name), options) : null);
-const listed = (page) => waitFor(page, "!document.getElementById('search').disabled && document.querySelectorAll('#results .item').length > 0", 40000);
+const listed = (page) =>
+  waitFor(page, "!document.getElementById('search').disabled && document.querySelectorAll('#results .item').length > 0", 40000).catch(async (error) => {
+    const seen = await evaluate(page, "JSON.stringify({ notice: document.getElementById('notice').textContent, title: document.getElementById('title').value, url: location.search })").catch(() => "?");
+    throw new Error(`${error.message} | popup shows ${seen}`);
+  });
 
 async function type(page, value) {
   await evaluate(page, `(() => { const t = document.getElementById('title'); t.focus(); t.value = ''; t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
@@ -105,10 +109,14 @@ try {
 
   // Opens a web page, then the popup "on" it, as clicking the toolbar button
   // on that page would.
-  async function popupOn(url) {
+  async function popupOn(url, { loaded = true } = {}) {
     const page = await browser.open(url);
-    await waitFor(page, "document.readyState === 'complete'", 15000);
-    const tabId = await evaluate(popup, `chrome.tabs.query({}).then((tabs) => tabs.find((tab) => tab.url === ${JSON.stringify(url)})?.id)`);
+    // A new tab starts out as about:blank, which is "complete" too.
+    const arrived = "location.href !== 'about:blank' && " + (loaded ? "document.readyState === 'complete'" : "document.title.length > 0");
+    await waitFor(page, arrived, 15000);
+    const find = `chrome.tabs.query({}).then((tabs) => tabs.find((tab) => tab.url === ${JSON.stringify(url)})?.id ?? null)`;
+    await waitFor(popup, `${find}.then((id) => id !== null)`, 8000);
+    const tabId = await evaluate(popup, find);
     return browser.open(`${popupUrl}?tab=${tabId}`);
   }
 
@@ -267,6 +275,37 @@ try {
   await evaluate(options, "(window.dispatchEvent(new Event('focus')), true)");
   check("switching libraries follows the saved link", await waitButton("Sign out"), await proxyButton());
 
+  // ------------------------------------------------ routes run side by side
+  // A publisher that takes six seconds to say no must not hold up the proxy.
+  fake.behave["www.tandfonline.com"] = { delay: 6000 };
+  let began = Date.now();
+  result = await download(popup, () => click(popup, "download"));
+  let took = Date.now() - began;
+  check("a slow refusal does not hold up a working route", result.status === "done" && result.provider === "Library proxy" && took < 4500, `${took}ms ${routes(result)}`);
+  check("the route that was overtaken is stopped, not waited for", stepOf(result, "publisher").state === "skipped" && stepOf(result, "publisher").detail === "not needed", routes(result));
+  check("EBSCO is not opened when a plain link delivers at once", stepOf(result, "ebsco").state === "skipped", routes(result));
+  delete fake.behave["www.tandfonline.com"];
+
+  // The proxy answers late: EBSCO has started by then, and is called off.
+  fake.behave["www-tandfonline-com.ezproxy.test-uni.edu"] = { delay: 2800, pdf: true };
+  fake.hits.length = 0;
+  result = await download(popup, () => click(popup, "download"));
+  check("EBSCO starts when the plain links are slow", fake.hits.some((hit) => hit.startsWith("research.ebsco.com/c/test1/search/advanced")), routes(result));
+  check("and is called off when another route gets the paper first", result.status === "done" && result.provider === "Library proxy" && stepOf(result, "ebsco").state === "skipped", routes(result));
+  await sleep(500);
+  check("its tab is closed", !(await browser.targets()).some((target) => target.type === "page" && target.url.includes("ebsco")));
+
+  // The first route to answer with a PDF drops the connection half-way: the
+  // route that was stopped for it is tried again.
+  fake.behave["www.tandfonline.com"] = { cut: true };
+  fake.behave["www-tandfonline-com.ezproxy.test-uni.edu"] = { delay: 700, pdf: true };
+  result = await download(popup, () => click(popup, "download"));
+  check("a winner that breaks off is replaced by the route it stopped", result.status === "done" && result.provider === "Library proxy" && stepOf(result, "publisher").state === "failed", routes(result));
+  check("and the break is named in plain words", stepOf(result, "publisher").detail === "download cut off", stepOf(result, "publisher").detail);
+  delete fake.behave["www.tandfonline.com"];
+  delete fake.behave["www-tandfonline-com.ezproxy.test-uni.edu"];
+  check("nothing but PDFs left in Downloads", saved().every(isPdf), JSON.stringify(saved()));
+
   // ------------------------------------------------ opened on an article page
   // INFORMS, off campus: the paper is recognised, the publisher refuses, the proxy delivers.
   await message(popup, { type: "settings:set", settings: { autoDefault: true } });
@@ -285,14 +324,16 @@ try {
   await snap(onPage, "popup-on-page.png");
   result = await download(onPage, () => key(onPage, "Enter"));
   check("one Enter downloads it", result.status === "done" && result.filename === INFORMS[0].file && isPdf(INFORMS[0].file), `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
-  check("through the proxy, since the publisher's own link is paywalled", result.provider === "Library proxy" && stepOf(result, "publisher").state === "failed", routes(result));
+  check("through the proxy, since the publisher's own link is paywalled", result.provider === "Library proxy" && stepOf(result, "publisher").state !== "done", routes(result));
+  check("the page's link is not asked for twice when it is the publisher's", !stepOf(result, "page"), routes(result));
 
   // The same site read through the library proxy: the page's own PDF link works.
   onPage = await popupOn(`https://pubsonline-informs-org.ezproxy.test-uni.edu/doi/full/${INFORMS[1].doi}`);
   await listed(onPage);
   check("a proxied INFORMS page is recognised", (await text(onPage, "count")) === "On this page");
   result = await download(onPage, () => key(onPage, "Enter"));
-  check("and downloaded from that page's own PDF link", result.status === "done" && result.provider === "This page" && result.filename === INFORMS[1].file, `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
+  // The proxy route leads to the same file and may get there first.
+  check("and downloaded, with that page's own PDF link among the routes", result.status === "done" && ["This page", "Library proxy"].includes(result.provider) && stepOf(result, "page")?.state !== "failed" && result.filename === INFORMS[1].file, `${result.status} ${result.provider || ""} ${result.filename || ""} ${routes(result)}`);
 
   // An issue page: every article it links to is listed.
   onPage = await popupOn("https://pubsonline.informs.org/toc/mnsc/66/1");
@@ -308,6 +349,20 @@ try {
   await key(onPage, "ArrowDown");
   result = await download(onPage, () => key(onPage, "Enter"));
   check("a paper picked from the list gets its author and year looked up", result.status === "done" && result.filename === INFORMS[2].file, `${result.status} ${result.filename || ""} ${routes(result)}`);
+
+  // A slow connection: the page has its title and tags but will not finish
+  // loading for a long time. The popup must not wait for it.
+  await evaluate(popup, "chrome.storage.session.remove(['job', 'lastSearch'])");
+  began = Date.now();
+  onPage = await popupOn(`https://pubsonline.informs.org/doi/${INFORMS[0].doi}?slow=1`, { loaded: false });
+  const quick = await waitFor(onPage, "document.querySelectorAll('#results .item').length > 0", 12000).then(() => true, () => false);
+  check("a page that is still loading is recognised without waiting for it", quick && (await text(onPage, "count")) === "On this page", `${Date.now() - began}ms ${await text(onPage, "notice")}`);
+
+  // A list that arrives in parts: the popup catches up as the page fills in.
+  await evaluate(popup, "chrome.storage.session.remove(['job', 'lastSearch'])");
+  onPage = await popupOn("https://pubsonline.informs.org/toc/mnsc/66/1?slow=1", { loaded: false });
+  const filled = await waitFor(onPage, "document.getElementById('count').textContent === '3 papers on this page'", 12000).then(() => true, () => false);
+  check("a list that is still loading fills in as it arrives", filled, await text(onPage, "count"));
 
   // A publisher we have no address pattern for, but whose page names its PDF.
   onPage = await popupOn(NO_PATTERN.page);
@@ -329,6 +384,12 @@ try {
 
   result = await download(popup, () => key(popup, "Enter"));
   check("a second copy does not overwrite the first", result.status === "done" && result.filename !== IN_EBSCO.file && saved().includes(IN_EBSCO.file), result.filename);
+
+  // A short title: Crossref's whole-reference search buries the paper itself
+  // under longer titles and puts a working-paper version first.
+  await search(popup, "Bargaining Chains");
+  const firstDoi = await evaluate(popup, "document.querySelector('#results .item .doi').textContent");
+  check("a short title finds the published paper first (live)", firstDoi === "10.1287/mnsc.1100.1251", firstDoi);
 
   // ------------------------------------------------ live open-access routes
   await search(popup, OPEN_ACCESS.doi);

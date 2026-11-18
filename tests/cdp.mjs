@@ -13,7 +13,7 @@ const CANDIDATES = [
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function launch({ profile, downloads, extraArgs = [] }) {
+export async function launch({ profile, downloads, extraArgs = [], headless = true }) {
   const chrome = CANDIDATES.find((path) => existsSync(path));
   if (!chrome) throw new Error("Chrome not found. Set CHROME to its binary.");
   rmSync(profile, { recursive: true, force: true });
@@ -30,7 +30,7 @@ export async function launch({ profile, downloads, extraArgs = [] }) {
   const proc = spawn(
     chrome,
     [
-      "--headless=new",
+      ...(headless ? ["--headless=new"] : []),
       "--remote-debugging-pipe",
       "--enable-unsafe-extension-debugging", // lets Extensions.loadUnpacked work
       `--user-data-dir=${profile}`,

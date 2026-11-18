@@ -34,7 +34,7 @@ It only ever uses your own university sign-in. See the [disclaimer](#disclaimer)
 - Article pages of other publishers are recognised the same way, as long as the page names its DOI.
 - Or paste any title or DOI. The paper is looked up on [Crossref](https://www.crossref.org/) and the matches are listed, best first.
 
-**Getting the PDF.** Paper Fetch tries these routes in order and stops at the first that returns a PDF:
+**Getting the PDF.** The routes to the published paper are tried at the same time. The first one that answers with a PDF is downloaded and the others are stopped, so a slow or refusing site does not hold up one that works. Open access is the fallback when none of them delivers, because a free copy is often an earlier version of the paper.
 
 | Route | Works when |
 | --- | --- |
@@ -77,7 +77,7 @@ EBSCO is not a subject database. It hosts many databases that libraries subscrib
 
 **Other publishers with a direct PDF address:** Wiley, Springer (incl. Palgrave), Taylor & Francis, Sage, Nature, Science, PNAS, ACS, ACM, SIAM, Academy of Management, University of Chicago Press, Royal Society, ASCE and IOP. For the rest (Elsevier, IEEE, Oxford, Cambridge, JSTOR, …) Paper Fetch uses the PDF link on the article page when you open it there, then EBSCO and open access, and otherwise hands you the article page.
 
-**How far it has been tested.** The automated tests run every route against stand-in servers built to look like the real sites, plus live lookups on Crossref and OpenAlex and live downloads of two open-access articles. The INFORMS site blocks automated browsers, so recognition there was tested on a stand-in with the same addresses and tags, not on the live site. In real use it has run against one university's library. Reports from other libraries are welcome, whether it worked or not.
+**How far it has been tested.** The automated tests run every route against stand-in servers built to look like the real sites, plus live lookups on Crossref and OpenAlex and live downloads of two open-access articles. The INFORMS site turns automated browsers away, so the popup was tested on a stand-in built from the addresses and tags of a real INFORMS article page, including one that is still loading, and not on the live site. In real use it has run against one university's library. Reports from other libraries are welcome, whether it worked or not.
 
 **Known limits**
 
